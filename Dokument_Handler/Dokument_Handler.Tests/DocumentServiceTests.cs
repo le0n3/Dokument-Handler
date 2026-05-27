@@ -40,10 +40,20 @@ public class DocumentServiceTests
         var oldPath = sut.GetFullPath(entry);
 
         sut.AddCategory("Rechnungen");
-        entry.Category = "Rechnungen";
-        entry.Description = "updated";
-        entry.Tags = ["wichtig"];
-        sut.UpdateEntry(entry);
+        var update = new Dokument_Handler.Models.DocumentEntry
+        {
+            Id = entry.Id,
+            FileName = entry.FileName,
+            OriginalFileName = entry.OriginalFileName,
+            Category = "Rechnungen",
+            Tags = ["wichtig"],
+            Description = "updated",
+            ContentType = entry.ContentType,
+            RelativePath = entry.RelativePath,
+            UploadedAt = entry.UploadedAt,
+            FileSizeBytes = entry.FileSizeBytes
+        };
+        sut.UpdateEntry(update);
 
         var updated = sut.GetById(entry.Id);
         Assert.NotNull(updated);
