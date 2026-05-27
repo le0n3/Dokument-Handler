@@ -14,9 +14,6 @@ public class AiClassificationOptions
     public string ApiKey { get; set; } = string.Empty;
     public string Model { get; set; } = "llama3.2";
     public int MaxTextChars { get; set; } = 4000;
-    /// <summary>
-    /// false = Ollama/lokale Modelle; true = OpenAI (response_format: json_object)
-    /// </summary>
     public bool UseJsonFormat { get; set; } = false;
 }
 
@@ -30,26 +27,29 @@ public class AiClassificationResult
 public class AiClassificationService
 {
     private readonly HttpClient _http;
-    private readonly AiClassificationOptions _options;
+    private readonly AppSettingsService _settingsService;
     private readonly ILogger<AiClassificationService> _logger;
 
     public AiClassificationService(
         HttpClient http,
-        IConfiguration configuration,
+        AppSettingsService settingsService,
         ILogger<AiClassificationService> logger)
     {
         _http = http;
+        _settingsService = settingsService;
         _logger = logger;
-        _options = configuration.GetSection("AiClassification").Get<AiClassificationOptions>()
-                   ?? new AiClassificationOptions();
-
-        _http.BaseAddress = new Uri(_options.ApiBaseUrl.TrimEnd('/') + "/");
-        _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", _options.ApiKey);
     }
 
-    public bool IsEnabled => _options.Enabled && !string.IsNullOrWhiteSpace(_options.ApiKey)
-                             && !_options.ApiKey.StartsWith("YOUR_");
+    public bool IsEnabled
+    {
+        get
+        {
+            var options = _settingsService.GetAiClassificationOptions();
+            return options.Enabled
+                   && !string.IsNullOrWhiteSpace(options.ApiKey)
+                   && !options.ApiKey.StartsWith("YOUR_");
+        }
+    }
 
     /// <summary>
     /// Extrahiert Text aus einem PDF und lässt ihn vom LLM klassifizieren.
@@ -59,19 +59,21 @@ public class AiClassificationService
         string filePath,
         IReadOnlyList<string> availableCategories)
     {
+        var options = _settingsService.GetAiClassificationOptions();
+
         if (!IsEnabled)
             return null;
 
         try
         {
-            var text = ExtractPdfText(filePath);
+            var text = ExtractPdfText(filePath, options.MaxTextChars);
             if (string.IsNullOrWhiteSpace(text))
             {
                 _logger.LogInformation("AI-Klassifizierung: kein Text in {File} gefunden.", filePath);
                 return null;
             }
 
-            return await CallLlmAsync(text, availableCategories);
+            return await CallLlmAsync(text, availableCategories, options);
         }
         catch (Exception ex)
         {
@@ -80,23 +82,25 @@ public class AiClassificationService
         }
     }
 
-    private string ExtractPdfText(string filePath)
+    private string ExtractPdfText(string filePath, int maxTextChars)
     {
+        var cappedMax = Math.Max(500, maxTextChars);
         var sb = new StringBuilder();
         using var doc = PdfDocument.Open(filePath);
         foreach (var page in doc.GetPages())
         {
             sb.AppendLine(page.Text);
-            if (sb.Length >= _options.MaxTextChars) break;
+            if (sb.Length >= cappedMax) break;
         }
-        return sb.Length > _options.MaxTextChars
-            ? sb.ToString()[.._options.MaxTextChars]
+        return sb.Length > cappedMax
+            ? sb.ToString()[..cappedMax]
             : sb.ToString();
     }
 
     private async Task<AiClassificationResult?> CallLlmAsync(
         string pdfText,
-        IReadOnlyList<string> availableCategories)
+        IReadOnlyList<string> availableCategories,
+        AiClassificationOptions options)
     {
         var categoriesJson = JsonSerializer.Serialize(availableCategories);
         var systemPrompt =
@@ -114,10 +118,10 @@ public class AiClassificationService
             "- Tags: 2-5 relevante Stichworte auf Deutsch, Kleinschreibung.\n" +
             "- Beschreibung: prägnant, auf Deutsch.";
 
-        object requestBody = _options.UseJsonFormat
+        object requestBody = options.UseJsonFormat
             ? new
             {
-                model = _options.Model,
+                model = options.Model,
                 messages = new[]
                 {
                     new { role = "system", content = systemPrompt },
@@ -129,7 +133,7 @@ public class AiClassificationService
             }
             : (object)new
             {
-                model = _options.Model,
+                model = options.Model,
                 messages = new[]
                 {
                     new { role = "system", content = systemPrompt },
@@ -140,8 +144,8 @@ public class AiClassificationService
             };
 
         var json = JsonSerializer.Serialize(requestBody);
-        using var content = new StringContent(json, Encoding.UTF8, "application/json");
-        using var response = await _http.PostAsync("chat/completions", content);
+        using var request = CreateChatRequest(options, json);
+        using var response = await _http.SendAsync(request);
 
         response.EnsureSuccessStatusCode();
 
@@ -154,33 +158,31 @@ public class AiClassificationService
             .GetProperty("content")
             .GetString() ?? "{}";
 
-        // Ollama-Fallback: JSON aus ```json ... ``` Block extrahieren
         var jsonMatch = Regex.Match(messageContent, @"```(?:json)?\s*(\{.*?\})\s*```", RegexOptions.Singleline);
         if (jsonMatch.Success)
             messageContent = jsonMatch.Groups[1].Value;
         else if (!messageContent.TrimStart().StartsWith('{'))
         {
-            // Erstes vollständiges { ... } aus dem Text nehmen
             var braceMatch = Regex.Match(messageContent, @"\{.*\}", RegexOptions.Singleline);
             if (braceMatch.Success)
                 messageContent = braceMatch.Value;
         }
 
-        var result = JsonSerializer.Deserialize<AiClassificationResult>(
+        return JsonSerializer.Deserialize<AiClassificationResult>(
             messageContent,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-        return result;
     }
 
     public async Task<string?> SuggestDocumentNameAsync(string filePath)
     {
+        var options = _settingsService.GetAiClassificationOptions();
+
         if (!IsEnabled)
             return null;
 
         try
         {
-            var text = ExtractPdfText(filePath);
+            var text = ExtractPdfText(filePath, options.MaxTextChars);
             if (string.IsNullOrWhiteSpace(text))
                 return null;
 
@@ -191,7 +193,7 @@ public class AiClassificationService
 
             var requestBody = new
             {
-                model = _options.Model,
+                model = options.Model,
                 messages = new[]
                 {
                     new { role = "system", content = systemPrompt },
@@ -202,8 +204,8 @@ public class AiClassificationService
             };
 
             var json = JsonSerializer.Serialize(requestBody);
-            using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var response = await _http.PostAsync("chat/completions", content);
+            using var request = CreateChatRequest(options, json);
+            using var response = await _http.SendAsync(request);
             response.EnsureSuccessStatusCode();
 
             var responseJson = await response.Content.ReadAsStringAsync();
@@ -237,5 +239,22 @@ public class AiClassificationService
             _logger.LogWarning(ex, "KI-Dateinamenvorschlag fehlgeschlagen für {File}.", filePath);
             return null;
         }
+    }
+
+    private static HttpRequestMessage CreateChatRequest(AiClassificationOptions options, string json)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUri(options.ApiBaseUrl));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        return request;
+    }
+
+    private static Uri BuildChatCompletionsUri(string apiBaseUrl)
+    {
+        var baseUrl = string.IsNullOrWhiteSpace(apiBaseUrl)
+            ? "http://localhost:11434/v1"
+            : apiBaseUrl.Trim().TrimEnd('/');
+
+        return new Uri($"{baseUrl}/chat/completions");
     }
 }

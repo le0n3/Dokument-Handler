@@ -4,6 +4,7 @@ using Dokument_Handler.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<DocumentService>();
 builder.Services.AddHostedService<EmailImportService>();
 

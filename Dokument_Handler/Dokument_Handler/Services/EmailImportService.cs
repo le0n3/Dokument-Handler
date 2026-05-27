@@ -8,11 +8,12 @@ namespace Dokument_Handler.Services;
 
 public class EmailImportOptions
 {
+    public bool Enabled { get; set; } = false;
     public string Host { get; set; } = string.Empty;
     public int Port { get; set; } = 993;
     public bool UseSsl { get; set; } = true;
     public string Security { get; set; } = "Auto";
-    public bool AllowInvalidCertificate { get; set; } = false; // neu
+    public bool AllowInvalidCertificate { get; set; } = false;
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
     public string Mailbox { get; set; } = "INBOX";
@@ -24,33 +25,43 @@ public class EmailImportService : BackgroundService
 {
     private readonly ILogger<EmailImportService> _logger;
     private readonly DocumentService _docService;
-    private readonly EmailImportOptions _options;
+    private readonly AppSettingsService _settingsService;
 
     public EmailImportService(
         ILogger<EmailImportService> logger,
         DocumentService docService,
-        IConfiguration configuration)
+        AppSettingsService settingsService)
     {
         _logger = logger;
         _docService = docService;
-        _options = configuration.GetSection("EmailImport").Get<EmailImportOptions>() ?? new EmailImportOptions();
+        _settingsService = settingsService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (string.IsNullOrWhiteSpace(_options.Host) || string.IsNullOrWhiteSpace(_options.Username))
-        {
-            _logger.LogWarning("EmailImportService: Keine IMAP-Konfiguration gefunden. Dienst wird nicht gestartet.");
-            return;
-        }
-
-        _logger.LogInformation("EmailImportService gestartet. Polling alle {Interval}s von {Host}.", _options.PollIntervalSeconds, _options.Host);
+        _logger.LogInformation("EmailImportService gestartet.");
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            var options = _settingsService.GetEmailImportOptions();
+            var delaySeconds = Math.Max(5, options.PollIntervalSeconds);
+
             try
             {
-                await PollMailboxAsync(stoppingToken);
+                if (!options.Enabled)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), stoppingToken);
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(options.Host) || string.IsNullOrWhiteSpace(options.Username))
+                {
+                    _logger.LogWarning("EmailImportService: IMAP-Konfiguration unvollständig (Host/Username). Import pausiert.");
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), stoppingToken);
+                    continue;
+                }
+
+                await PollMailboxAsync(options, stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -61,16 +72,16 @@ public class EmailImportService : BackgroundService
                 _logger.LogError(ex, "EmailImportService: Fehler beim Abrufen der E-Mails.");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(_options.PollIntervalSeconds), stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(delaySeconds), stoppingToken);
         }
     }
 
-    private async Task PollMailboxAsync(CancellationToken ct)
+    private async Task PollMailboxAsync(EmailImportOptions options, CancellationToken ct)
     {
         using var client = new ImapClient();
-        var socketOptions = ResolveSocketOptions(_options);
+        var socketOptions = ResolveSocketOptions(options);
 
-        if (_options.AllowInvalidCertificate)
+        if (options.AllowInvalidCertificate)
         {
             client.ServerCertificateValidationCallback = (_, _, _, _) => true;
             _logger.LogWarning("EmailImportService: Zertifikatsprüfung ist deaktiviert (nur Testbetrieb).");
@@ -78,14 +89,14 @@ public class EmailImportService : BackgroundService
 
         _logger.LogInformation(
             "EmailImportService: Verbinde zu IMAP {Host}:{Port} mit Security={Security}.",
-            _options.Host,
-            _options.Port,
+            options.Host,
+            options.Port,
             socketOptions);
 
-        await client.ConnectAsync(_options.Host, _options.Port, socketOptions, ct);
-        await client.AuthenticateAsync(_options.Username, _options.Password, ct);
+        await client.ConnectAsync(options.Host, options.Port, socketOptions, ct);
+        await client.AuthenticateAsync(options.Username, options.Password, ct);
 
-        var folder = await client.GetFolderAsync(_options.Mailbox, ct);
+        var folder = await client.GetFolderAsync(options.Mailbox, ct);
         await folder.OpenAsync(FolderAccess.ReadWrite, ct);
 
         // Fetch only unseen messages

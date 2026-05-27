@@ -1,15 +1,139 @@
 @page "/einstellungen"
+@using System.Net.Http.Headers
+@using System.Text
+@using System.Text.Json
 @using Dokument_Handler.Services
+@using MailKit
+@using MailKit.Net.Imap
+@using MailKit.Security
 @inject DocumentService DocService
+@inject AppSettingsService SettingsService
+@inject IHttpClientFactory HttpClientFactory
 @rendermode InteractiveServer
 
 <PageTitle>Einstellungen - DokuHandler</PageTitle>
 
 <div class="topbar">
-    <span class="topbar-title">⚙ Kategorien verwalten</span>
+    <span class="topbar-title">⚙ Einstellungen</span>
 </div>
 
-<div class="page-body">
+<div class="page-body" style="display:flex;flex-direction:column;gap:1rem;max-width:900px;padding-bottom:7rem">
+    <div class="card">
+        <h2 class="card-title mb-3">Allgemein</h2>
+
+        <div class="form-group">
+            <label class="form-label">Speicherpfad für Dokumente</label>
+            <input class="form-control" @bind="_settings.Storage.RootPath" placeholder="Leer lassen = lokaler Standardpfad" />
+            <div class="text-muted" style="font-size:.8rem;margin-top:.25rem">
+                Beispiel lokal: D:\Dokumente\Archiv &nbsp;|&nbsp; Beispiel NAS: \\NAS\Freigabe\DokuHandler
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 class="card-title mb-3">E-Mail-Import (IMAP)</h2>
+
+        <div class="form-group" style="display:flex;align-items:center;gap:.6rem">
+            <input type="checkbox" @bind="_settings.EmailImport.Enabled" />
+            <label class="form-label" style="margin:0">E-Mail-Abfrage aktivieren</label>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem">
+            <div class="form-group">
+                <label class="form-label">Host</label>
+                <input class="form-control" @bind="_settings.EmailImport.Host" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Port</label>
+                <input type="number" class="form-control" @bind="_settings.EmailImport.Port" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Mailbox</label>
+                <input class="form-control" @bind="_settings.EmailImport.Mailbox" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Intervall (Sekunden)</label>
+                <input type="number" class="form-control" @bind="_settings.EmailImport.PollIntervalSeconds" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Security</label>
+                <input class="form-control" @bind="_settings.EmailImport.Security" placeholder="Auto / SslOnConnect / StartTls" />
+            </div>
+            <div class="form-group" style="display:flex;align-items:center;gap:.6rem;margin-top:1.7rem">
+                <input type="checkbox" @bind="_settings.EmailImport.AllowInvalidCertificate" />
+                <label class="form-label" style="margin:0">Ungültige Zertifikate erlauben</label>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Benutzername</label>
+            <input class="form-control" @bind="_settings.EmailImport.Username" />
+        </div>
+        <div class="form-group">
+            <label class="form-label">Passwort</label>
+            <input class="form-control" type="password" @bind="_settings.EmailImport.Password" />
+        </div>
+
+        <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <button class="btn btn-outline" @onclick="TestEmailAsync" disabled="@_testingEmail">
+                @if (_testingEmail)
+                { <span>⏳ E-Mail-Test läuft…</span> }
+                else
+                { <span>📧 E-Mail testen</span> }
+            </button>
+            @if (!string.IsNullOrWhiteSpace(_emailTestMsg))
+            {
+                <span style="font-size:.85rem;color:@(_emailTestOk ? "#16a34a" : "#dc2626")">@_emailTestMsg</span>
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 class="card-title mb-3">KI-Konfiguration</h2>
+
+        <div class="form-group" style="display:flex;align-items:center;gap:.6rem">
+            <input type="checkbox" @bind="_settings.AiClassification.Enabled" />
+            <label class="form-label" style="margin:0">KI-Funktionen aktivieren</label>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem">
+            <div class="form-group">
+                <label class="form-label">API Base URL</label>
+                <input class="form-control" @bind="_settings.AiClassification.ApiBaseUrl" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Modell</label>
+                <input class="form-control" @bind="_settings.AiClassification.Model" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Max Text Zeichen</label>
+                <input type="number" class="form-control" @bind="_settings.AiClassification.MaxTextChars" />
+            </div>
+            <div class="form-group" style="display:flex;align-items:center;gap:.6rem;margin-top:1.7rem">
+                <input type="checkbox" @bind="_settings.AiClassification.UseJsonFormat" />
+                <label class="form-label" style="margin:0">JSON Response-Format</label>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">API Key</label>
+            <input class="form-control" type="password" @bind="_settings.AiClassification.ApiKey" />
+        </div>
+
+        <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <button class="btn btn-outline" @onclick="TestAiAsync" disabled="@_testingAi">
+                @if (_testingAi)
+                { <span>⏳ KI-Test läuft…</span> }
+                else
+                { <span>🤖 KI testen</span> }
+            </button>
+            @if (!string.IsNullOrWhiteSpace(_aiTestMsg))
+            {
+                <span style="font-size:.85rem;color:@(_aiTestOk ? "#16a34a" : "#dc2626")">@_aiTestMsg</span>
+            }
+        </div>
+    </div>
+
     <div class="card" style="max-width:500px">
         <h2 class="card-title mb-3">Kategorien</h2>
 
@@ -36,19 +160,41 @@
                 + Hinzufügen
             </button>
         </div>
-        @if (!string.IsNullOrEmpty(_msg))
-        {
-            <p style="color:var(--primary);margin-top:.5rem;font-size:.85rem">✓ @_msg</p>
-        }
     </div>
+</div>
+
+<div style="position:fixed;right:1.25rem;bottom:1.25rem;z-index:1200;
+            display:flex;align-items:center;gap:.75rem;background:rgba(15,23,42,.95);
+            border:1px solid rgba(148,163,184,.25);border-radius:12px;padding:.65rem .8rem;
+            box-shadow:0 10px 30px rgba(0,0,0,.25)">
+    @if (!string.IsNullOrWhiteSpace(_msg))
+    {
+        <span style="color:#86efac;font-size:.85rem">✓ @_msg</span>
+    }
+    <button class="btn btn-primary" @onclick="SaveSettingsAsync">💾 Speichern</button>
 </div>
 
 @code {
     private string _newCategory = string.Empty;
     private string? _msg;
     private Dictionary<string, int> _counts = new();
+    private AppSettingsSnapshot _settings = new();
+
+    private bool _testingEmail;
+    private string? _emailTestMsg;
+    private bool _emailTestOk;
+
+    private bool _testingAi;
+    private string? _aiTestMsg;
+    private bool _aiTestOk;
 
     protected override void OnInitialized()
+    {
+        _settings = SettingsService.GetSettings();
+        RefreshCategoryCounts();
+    }
+
+    private void RefreshCategoryCounts()
     {
         var all = DocService.GetAll();
         _counts = DocService.GetCategories()
@@ -62,6 +208,128 @@
         DocService.AddCategory(name);
         _counts[name] = 0;
         _newCategory = string.Empty;
-        _msg = $"Kategorie \"{name}\" wurde hinzugefuegt.";
+        _msg = $"Kategorie \"{name}\" wurde hinzugefügt.";
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        NormalizeSettings();
+        await SettingsService.SaveSettingsAsync(_settings);
+        _msg = "Einstellungen gespeichert. Änderungen sind sofort aktiv.";
+        RefreshCategoryCounts();
+    }
+
+    private async Task TestEmailAsync()
+    {
+        _testingEmail = true;
+        _emailTestMsg = null;
+
+        try
+        {
+            NormalizeSettings();
+            var email = _settings.EmailImport;
+
+            if (string.IsNullOrWhiteSpace(email.Host) || string.IsNullOrWhiteSpace(email.Username) || string.IsNullOrWhiteSpace(email.Password))
+                throw new InvalidOperationException("Bitte Host, Benutzername und Passwort setzen.");
+
+            using var client = new ImapClient();
+            if (email.AllowInvalidCertificate)
+                client.ServerCertificateValidationCallback = (_, _, _, _) => true;
+
+            var socketOptions = ResolveSocketOptions(email.Security, email.UseSsl);
+            await client.ConnectAsync(email.Host, email.Port, socketOptions);
+            await client.AuthenticateAsync(email.Username, email.Password);
+
+            var folder = await client.GetFolderAsync(email.Mailbox);
+            await folder.OpenAsync(FolderAccess.ReadOnly);
+            await client.DisconnectAsync(true);
+
+            _emailTestOk = true;
+            _emailTestMsg = "IMAP-Verbindung erfolgreich.";
+        }
+        catch (Exception ex)
+        {
+            _emailTestOk = false;
+            _emailTestMsg = $"E-Mail-Test fehlgeschlagen: {ex.Message}";
+        }
+        finally
+        {
+            _testingEmail = false;
+        }
+    }
+
+    private async Task TestAiAsync()
+    {
+        _testingAi = true;
+        _aiTestMsg = null;
+
+        try
+        {
+            NormalizeSettings();
+            var ai = _settings.AiClassification;
+
+            if (string.IsNullOrWhiteSpace(ai.ApiBaseUrl) || string.IsNullOrWhiteSpace(ai.Model))
+                throw new InvalidOperationException("Bitte API Base URL und Modell setzen.");
+
+            if (string.IsNullOrWhiteSpace(ai.ApiKey) || ai.ApiKey.StartsWith("YOUR_", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Bitte einen gültigen API Key setzen.");
+
+            var http = HttpClientFactory.CreateClient();
+            http.BaseAddress = new Uri(ai.ApiBaseUrl.TrimEnd('/') + "/");
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ai.ApiKey);
+
+            var payload = new
+            {
+                model = ai.Model,
+                messages = new[]
+                {
+                    new { role = "system", content = "Antworte mit OK." },
+                    new { role = "user", content = "ping" }
+                },
+                temperature = 0,
+                max_tokens = 5
+            };
+
+            var json = JsonSerializer.Serialize(payload);
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var response = await http.PostAsync("chat/completions", content);
+
+            response.EnsureSuccessStatusCode();
+
+            _aiTestOk = true;
+            _aiTestMsg = "KI-Endpunkt erfolgreich erreichbar.";
+        }
+        catch (Exception ex)
+        {
+            _aiTestOk = false;
+            _aiTestMsg = $"KI-Test fehlgeschlagen: {ex.Message}";
+        }
+        finally
+        {
+            _testingAi = false;
+        }
+    }
+
+    private void NormalizeSettings()
+    {
+        if (_settings.EmailImport.PollIntervalSeconds < 5)
+            _settings.EmailImport.PollIntervalSeconds = 5;
+
+        if (_settings.EmailImport.Port <= 0)
+            _settings.EmailImport.Port = 993;
+
+        if (_settings.AiClassification.MaxTextChars < 500)
+            _settings.AiClassification.MaxTextChars = 500;
+    }
+
+    private static SecureSocketOptions ResolveSocketOptions(string? security, bool useSsl)
+    {
+        if (!string.IsNullOrWhiteSpace(security)
+            && Enum.TryParse<SecureSocketOptions>(security, true, out var parsed))
+        {
+            return parsed;
+        }
+
+        return useSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.None;
     }
 }

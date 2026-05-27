@@ -11,8 +11,11 @@
     <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.8" />
     <PackageReference Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
-    <ProjectReference Include="..\Dokument_Handler.Client\Dokument_Handler.Client.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dokument_Handler.Client\Dokument_Handler.Client.csproj" />
   </ItemGroup>
 
 </Project>
