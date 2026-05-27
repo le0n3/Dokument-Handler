@@ -1,0 +1,33 @@
+{
+  "Documents": [
+    {
+      "Id": "0d98a138-bbff-4cab-abd0-8e6ae5e220a4",
+      "FileName": "b27ab538-ace5-4332-808a-2d630b84e4e7.pdf",
+      "OriginalFileName": "Darmstadt_2026.pdf",
+      "Category": "Rechnungen",
+      "Tags": [
+        "Rechnung",
+        "Hotelrechnung",
+        "Zahlung"
+      ],
+      "Description": "Rechnung f\u00FCr eine \u00DCbernachtung im Fair\u0027n Square Hotel in Darmstadt, einschlie\u00DFlich Zimmerpreis, Fr\u00FChst\u00FCck und Steuern",
+      "UploadedAt": "2026-05-27T12:16:31.8805977+02:00",
+      "FileSizeBytes": 184754,
+      "ContentType": "application/pdf",
+      "RelativePath": "Allgemein\\b27ab538-ace5-4332-808a-2d630b84e4e7.pdf"
+    }
+  ],
+  "Categories": [
+    "Allgemein",
+    "E-Mail",
+    "Rechnungen",
+    "Vertr\u00E4ge",
+    "Beh\u00F6rden",
+    "Versicherung",
+    "Steuern",
+    "Medizin",
+    "Arbeit",
+    "Wohnen",
+    "Sonstiges"
+  ]
+}

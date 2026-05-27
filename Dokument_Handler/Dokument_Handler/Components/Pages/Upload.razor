@@ -1,0 +1,404 @@
+@page "/upload"
+@using Dokument_Handler.Models
+@using Dokument_Handler.Services
+@using Microsoft.AspNetCore.Components.Forms
+@inject DocumentService DocService
+@inject AiClassificationService AiService
+@inject NavigationManager Nav
+@rendermode InteractiveServer
+
+<PageTitle>Dokument hochladen</PageTitle>
+
+<div class="topbar">
+    <span class="topbar-title">⬆ Dokument hochladen</span>
+</div>
+
+<div class="page-body">
+    <div class="card" style="max-width:600px;margin:0 auto">
+        @if (_aiClassifying)
+        {
+            <div style="text-align:center;padding:2.5rem 2rem">
+                <div style="font-size:3.5rem;margin-bottom:1rem">🤖</div>
+                <h2 style="margin-bottom:.5rem">KI analysiert das Dokument…</h2>
+                <p class="text-muted" style="margin-bottom:1.5rem">@_aiStatusText</p>
+
+                <div style="background:var(--border);border-radius:99px;height:8px;overflow:hidden;margin-bottom:1rem">
+                    <div style="height:100%;border-radius:99px;background:var(--primary);
+                                width:@(_aiProgress)%;transition:width .4s ease;"></div>
+                </div>
+                <p class="text-muted" style="font-size:.8rem">@_aiProgress %</p>
+            </div>
+        }
+        else if (_uploaded != null)
+        {
+            <div style="text-align:center;padding:2rem">
+                <div style="font-size:4rem">✅</div>
+                <h2>Erfolgreich hochgeladen!</h2>
+                <p class="text-muted">@_uploaded.OriginalFileName wurde in Kategorie „@_uploaded.Category" gespeichert.</p>
+
+                @if (_aiResult != null)
+                {
+                    <div style="background:var(--surface-2,#f8fafc);border:1px solid var(--border);border-radius:var(--radius);
+                                padding:1rem;margin:1rem 0;text-align:left">
+                        <div style="font-size:.75rem;font-weight:600;color:var(--primary);margin-bottom:.5rem">🤖 KI-Ergebnis</div>
+                        <div style="margin-bottom:.4rem">
+                            <span class="badge badge-category">@_uploaded.Category</span>
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.4rem">
+                            @foreach (var t in _uploaded.Tags)
+                            { <span class="tag">@t</span> }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_uploaded.Description))
+                        {
+                            <p style="font-size:.85rem;color:var(--text-muted);margin:0">@_uploaded.Description</p>
+                        }
+                    </div>
+                }
+                else if (_aiSkipped)
+                {
+                    <p class="text-muted" style="font-size:.8rem">ℹ KI-Analyse nicht verfügbar (kein PDF oder KI deaktiviert).</p>
+                }
+
+                <div style="display:flex;gap:.75rem;justify-content:center;margin-top:1rem">
+                    <button class="btn btn-outline" @onclick="ResetForm">Weiteres hochladen</button>
+                    <a class="btn btn-primary" href="/">Zur Übersicht</a>
+                </div>
+            </div>
+        }
+        else
+        {
+            <h2 class="card-title mb-3">Neues Dokument</h2>
+
+            <!-- Drop Zone -->
+            <InputFile OnChange="OnFileSelected" style="display:none" id="fileInput" />
+            <label for="fileInput" class="upload-zone @(_dragOver ? "dragover" : "")">
+                @if (_selectedFile != null)
+                {
+                    <div style="font-size:3rem">✅</div>
+                    <p><strong>@_selectedFile.Name</strong></p>
+                    <p class="text-muted">@FormatSize(_selectedFile.Size)</p>
+                }
+                else
+                {
+                    <div class="upload-zone-icon">📂</div>
+                    <p><strong>Klicken zum Auswählen</strong></p>
+                    <p>oder Datei hier hineinziehen</p>
+                    <p class="text-muted" style="font-size:.8rem">PDF, Bilder, Word, Excel, ZIP und mehr</p>
+                }
+            </label>
+
+            <!-- Metadata -->
+            <div class="mt-3">
+                <div class="form-group">
+                    <label class="form-label">Name *</label>
+                    <div style="display:flex;gap:.5rem;align-items:center">
+                        <input class="form-control" @bind="_customFileName" placeholder="Dateiname ohne Endung" />
+                        @if (SelectedFileIsPdf && AiService?.IsEnabled == true)
+                        {
+                            <button class="btn btn-outline btn-sm" type="button" @onclick="SuggestNameFromAiAsync" disabled="@_aiNameLoading">
+                                @if (_aiNameLoading)
+                                { <span>⏳</span> }
+                                else
+                                { <span>🤖 Name per KI</span> }
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Kategorie *</label>
+                    <select class="form-control" @bind="_category">
+                        @foreach (var c in DocService.GetCategories())
+                        { <option value="@c">@c</option> }
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Beschreibung</label>
+                    <textarea class="form-control" rows="2" placeholder="Optionale Notiz zu diesem Dokument..."
+                              @bind="_description"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Tags</label>
+                    <div class="tag-input-wrapper" style="border:1px solid var(--border);border-radius:var(--radius);padding:.4rem .5rem">
+                        @foreach (var t in _tags)
+                        {
+                            var tag = t;
+                            <span class="tag">
+                                @tag
+                                <button class="tag-remove" type="button" @onclick="()=>_tags.Remove(tag)">×</button>
+                            </span>
+                        }
+                        <input class="form-control" style="border:none;padding:.1rem .3rem;flex:1;min-width:120px"
+                               placeholder='z.B. "Rechnung" dann Enter drücken'
+                               @bind="_tagInput" @bind:event="oninput"
+                               @onkeydown="AddTagOnEnter" />
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.5rem">
+                        @foreach (var suggested in _suggestedTags.Where(s => !_tags.Contains(s)))
+                        {
+                            var st = suggested;
+                            <button class="btn btn-ghost btn-sm" style="font-size:.75rem;padding:.15rem .5rem"
+                                    type="button" @onclick="()=>AddSuggestedTag(st)">
+                                + @st
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                @if (AiService?.IsEnabled == true)
+                {
+                    <div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;
+                                background:#eff6ff;border-radius:var(--radius);margin-bottom:.75rem;font-size:.85rem">
+                        <span>🤖</span>
+                        <span style="color:#1d4ed8">PDF wird nach dem Upload automatisch per KI getaggt</span>
+                    </div>
+                }
+
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div style="color:#ef4444;padding:.5rem;background:#fef2f2;border-radius:var(--radius);margin-bottom:.75rem">
+                        ⚠ @_error
+                    </div>
+                }
+
+                <button class="btn btn-primary w-100" @onclick="UploadFile" disabled="@(_uploading || _selectedFile == null || string.IsNullOrWhiteSpace(_customFileName))">
+                    @if (_uploading)
+                    { <span>⏳ Wird hochgeladen...</span> }
+                    else
+                    { <span>⬆ Hochladen</span> }
+                </button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private IBrowserFile? _selectedFile;
+    private string _category = "Allgemein";
+    private string _description = string.Empty;
+    private List<string> _tags = new();
+    private string _tagInput = string.Empty;
+    private bool _uploading;
+    private bool _dragOver;
+    private string? _error;
+    private DocumentEntry? _uploaded;
+    private string _customFileName = string.Empty;
+    private bool _aiNameLoading;
+
+    private bool _aiClassifying;
+    private int _aiProgress;
+    private string _aiStatusText = string.Empty;
+    private object? _aiResult;
+    private bool _aiSkipped;
+
+    private bool SelectedFileIsPdf => _selectedFile != null &&
+        ((_selectedFile.ContentType?.Contains("pdf", StringComparison.OrdinalIgnoreCase) ?? false)
+         || _selectedFile.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
+
+    private readonly List<string> _suggestedTags = new()
+    {
+        "Rechnung", "Vertrag", "Quittung", "Mahnung", "Bescheid",
+        "Kündigung", "Angebot", "Lieferschein", "Garantie", "Steuer",
+        "Versicherung", "Arztbrief", "Zeugnis", "Lohnabrechnung"
+    };
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _selectedFile = e.File;
+        _error = null;
+        _customFileName = Path.GetFileNameWithoutExtension(_selectedFile.Name);
+
+        // auto-suggest category from filename
+        var name = _selectedFile.Name.ToLower();
+        if (name.Contains("rechnung") || name.Contains("invoice")) _category = "Rechnungen";
+        else if (name.Contains("vertrag") || name.Contains("contract")) _category = "Verträge";
+        else if (name.Contains("steuer")) _category = "Steuern";
+        else if (name.Contains("versicherung")) _category = "Versicherung";
+    }
+
+    private async Task UploadFile()
+    {
+        if (_selectedFile == null) return;
+        _uploading = true;
+        _error = null;
+
+        try
+        {
+            const long maxSize = 100 * 1024 * 1024; // 100 MB
+            await using var stream = _selectedFile.OpenReadStream(maxSize);
+            var contentType = _selectedFile.ContentType;
+            if (string.IsNullOrEmpty(contentType)) contentType = "application/octet-stream";
+
+            _uploaded = await DocService.UploadAsync(
+                stream, BuildUploadFileName(), _category, _tags, _description, contentType);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Fehler beim Hochladen: {ex.Message}";
+            _uploading = false;
+            return;
+        }
+
+        _uploading = false;
+
+        // KI-Analyse nur für PDFs
+        var isPdf = _uploaded!.ContentType.Contains("pdf", StringComparison.OrdinalIgnoreCase)
+                    || _uploaded.OriginalFileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
+
+        if (AiService?.IsEnabled == true && isPdf)
+        {
+            await RunAiClassificationAsync(_uploaded);
+        }
+        else
+        {
+            _aiSkipped = true;
+        }
+    }
+
+    private async Task SuggestNameFromAiAsync()
+    {
+        if (_selectedFile == null || !SelectedFileIsPdf || AiService?.IsEnabled != true) return;
+
+        _aiNameLoading = true;
+        _error = null;
+        string? tempPath = null;
+
+        try
+        {
+            const long maxSize = 100 * 1024 * 1024;
+            tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.pdf");
+
+            await using (var input = _selectedFile.OpenReadStream(maxSize))
+            await using (var output = File.Create(tempPath))
+            {
+                await input.CopyToAsync(output);
+            }
+
+            var suggestion = await AiService.SuggestDocumentNameAsync(tempPath);
+            if (!string.IsNullOrWhiteSpace(suggestion))
+            {
+                _customFileName = suggestion;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"KI-Namensvorschlag fehlgeschlagen: {ex.Message}";
+        }
+        finally
+        {
+            if (tempPath != null && File.Exists(tempPath))
+                File.Delete(tempPath);
+            _aiNameLoading = false;
+        }
+    }
+
+    private string BuildUploadFileName()
+    {
+        var baseName = (_customFileName ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(baseName) && _selectedFile != null)
+            baseName = Path.GetFileNameWithoutExtension(_selectedFile.Name);
+
+        baseName = string.Concat(baseName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim();
+        if (string.IsNullOrWhiteSpace(baseName))
+            baseName = "Dokument";
+
+        var ext = _selectedFile == null ? string.Empty : Path.GetExtension(_selectedFile.Name);
+        if (string.IsNullOrWhiteSpace(ext))
+            return baseName;
+
+        return baseName.EndsWith(ext, StringComparison.OrdinalIgnoreCase)
+            ? baseName
+            : baseName + ext;
+    }
+
+    private async Task RunAiClassificationAsync(DocumentEntry entry)
+    {
+        _aiClassifying = true;
+        _aiProgress = 0;
+        _aiStatusText = "Dokument wird geladen…";
+        StateHasChanged();
+
+        await SetProgress(20, "Text wird aus PDF extrahiert…");
+        await SetProgress(45, "KI analysiert Inhalt…");
+
+        try
+        {
+            var fullPath = DocService.GetFullPath(entry);
+            var result = await AiService.ClassifyDocumentAsync(fullPath, DocService.GetCategories());
+
+            await SetProgress(85, "Ergebnis wird gespeichert…");
+
+            if (result != null)
+            {
+                entry.Category = result.Category;
+                entry.Tags = result.Tags;
+                if (!string.IsNullOrWhiteSpace(result.Description))
+                    entry.Description = result.Description;
+                DocService.UpdateEntry(entry);
+                _aiResult = result;
+            }
+
+            await SetProgress(100, "Fertig!");
+            await Task.Delay(400);
+        }
+        catch
+        {
+            // KI-Fehler ist nicht kritisch
+        }
+        finally
+        {
+            _aiClassifying = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SetProgress(int percent, string text)
+    {
+        _aiProgress = percent;
+        _aiStatusText = text;
+        StateHasChanged();
+        await Task.Delay(350);
+    }
+
+    private void AddTagOnEnter(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or ",")
+        {
+            var tag = _tagInput.Trim().Trim(',');
+            if (!string.IsNullOrWhiteSpace(tag) && !_tags.Contains(tag))
+                _tags.Add(tag);
+            _tagInput = string.Empty;
+        }
+    }
+
+    private void AddSuggestedTag(string tag)
+    {
+        if (!_tags.Contains(tag)) _tags.Add(tag);
+    }
+
+    private void ResetForm()
+    {
+        _selectedFile = null;
+        _category = "Allgemein";
+        _description = string.Empty;
+        _tags = new();
+        _tagInput = string.Empty;
+        _error = null;
+        _uploaded = null;
+        _customFileName = string.Empty;
+        _aiNameLoading = false;
+        _aiClassifying = false;
+        _aiProgress = 0;
+        _aiResult = null;
+        _aiSkipped = false;
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
+        _ => $"{bytes / 1024.0 / 1024.0:F1} MB"
+    };
+}

@@ -1,0 +1,103 @@
+@page "/kategorie/{CategoryName}"
+@using Dokument_Handler.Models
+@using Dokument_Handler.Services
+@inject DocumentService DocService
+@rendermode InteractiveServer
+
+<PageTitle>@CategoryName – DokuHandler</PageTitle>
+
+<div class="topbar">
+    <span class="topbar-title">
+        📁 @(CategoryName == "Alle" ? "Alle Dokumente" : CategoryName)
+    </span>
+    <a href="/upload" class="btn btn-primary btn-sm">+ Hochladen</a>
+</div>
+
+<div class="page-body">
+    @if (_docs.Count == 0)
+    {
+        <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <h3>Keine Dokumente in dieser Kategorie</h3>
+            <a href="/upload" class="btn btn-primary mt-2">Jetzt hochladen</a>
+        </div>
+    }
+    else
+    {
+        <div class="doc-grid">
+            @foreach (var doc in _docs)
+            {
+                <div class="doc-card" @onclick="()=>_viewerDoc=doc">
+                    <div class="doc-card-thumb">@FileEmoji(doc.ContentType)</div>
+                    <div class="doc-card-body">
+                        <p class="doc-card-name" title="@doc.OriginalFileName">@doc.OriginalFileName</p>
+                        <div class="doc-card-meta">
+                            <span class="badge badge-category">@doc.Category</span>
+                            &nbsp;@doc.UploadedAt.ToString("dd.MM.yy")
+                        </div>
+                        <div class="doc-card-tags">
+                            @foreach (var t in doc.Tags.Take(3))
+                            { <span class="tag">@t</span> }
+                        </div>
+                    </div>
+                    <div class="doc-card-actions" @onclick:stopPropagation>
+                        <button class="btn btn-ghost btn-sm" @onclick="()=>_viewerDoc=doc">👁</button>
+                        <a class="btn btn-ghost btn-sm" href="/api/documents/@doc.Id/file" target="_blank">⬇</a>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@if (_viewerDoc != null)
+{
+    <div class="viewer-overlay">
+        <div class="viewer-topbar">
+            <span class="viewer-title">@FileEmoji(_viewerDoc.ContentType) @_viewerDoc.OriginalFileName</span>
+            <a class="btn btn-outline btn-sm" style="color:#fff;border-color:rgba(255,255,255,.4)"
+               href="/api/documents/@_viewerDoc.Id/file" target="_blank">⬇ Download</a>
+            <button class="btn btn-ghost btn-sm" style="color:#fff" @onclick="()=>_viewerDoc=null">✕</button>
+        </div>
+        <div class="viewer-body">
+            @if (_viewerDoc.ContentType == "application/pdf")
+            { <iframe src="/api/documents/@_viewerDoc.Id/inline"></iframe> }
+            else if (_viewerDoc.ContentType.StartsWith("image/"))
+            { <img src="/api/documents/@_viewerDoc.Id/inline" alt="@_viewerDoc.OriginalFileName" /> }
+            else
+            {
+                <div class="viewer-unsupported">
+                    <div style="font-size:5rem">📄</div>
+                    <h2>@_viewerDoc.OriginalFileName</h2>
+                    <a class="btn btn-primary" href="/api/documents/@_viewerDoc.Id/file" target="_blank">⬇ Herunterladen</a>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string CategoryName { get; set; } = "Alle";
+    private List<DocumentEntry> _docs = new();
+    private DocumentEntry? _viewerDoc;
+
+    protected override void OnParametersSet() => Load();
+
+    private void Load()
+    {
+        _docs = CategoryName == "Alle"
+            ? DocService.GetAll().OrderByDescending(d => d.UploadedAt).ToList()
+            : DocService.GetAll().Where(d => d.Category == CategoryName)
+                        .OrderByDescending(d => d.UploadedAt).ToList();
+    }
+
+    private static string FileEmoji(string mime) => mime switch
+    {
+        "application/pdf" => "📕",
+        "image/png" or "image/jpeg" or "image/gif" or "image/webp" => "🖼",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "📝",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "📊",
+        _ when mime.StartsWith("text/") => "📄",
+        _ => "📎"
+    };
+}

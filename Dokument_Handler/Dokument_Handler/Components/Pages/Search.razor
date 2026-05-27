@@ -1,0 +1,186 @@
+@page "/search"
+@using Dokument_Handler.Models
+@using Dokument_Handler.Services
+@inject DocumentService DocService
+@rendermode InteractiveServer
+
+<PageTitle>Dokumentensuche</PageTitle>
+
+<div class="topbar">
+    <span class="topbar-title">🔍 Fuzzy-Suche</span>
+    <div class="search-wrapper" style="max-width:600px;flex:1">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input class="search-input" type="search" placeholder="Suche nach Name, Beschreibung, Tags, Kategorie..."
+               @bind="_query" @oninput="OnSearch" autofocus />
+    </div>
+</div>
+
+<div class="page-body">
+    <!-- Filter Bar -->
+    <div class="card mb-3" style="padding:.75rem 1rem">
+        <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+            <span class="text-muted" style="font-size:.85rem">Kategorie:</span>
+            <button class="btn btn-sm @(_categoryFilter == null ? "btn-primary" : "btn-ghost")"
+                    @onclick="()=>SetCategory(null)">Alle</button>
+            @foreach (var cat in DocService.GetCategories())
+            {
+                var c = cat;
+                <button class="btn btn-sm @(_categoryFilter == c ? "btn-primary" : "btn-ghost")"
+                        @onclick="()=>SetCategory(c)">@c</button>
+            }
+        </div>
+        @if (_allTags.Any())
+        {
+            <div style="display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin-top:.5rem">
+                <span class="text-muted" style="font-size:.85rem">Tags:</span>
+                @foreach (var tag in _allTags)
+                {
+                    var t = tag;
+                    <button class="btn btn-sm @(_tagFilter.Contains(t) ? "btn-primary" : "btn-ghost")"
+                            style="font-size:.75rem;padding:.15rem .5rem" @onclick="()=>ToggleTagFilter(t)">
+                        @t
+                    </button>
+                }
+            </div>
+        }
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_query) || _categoryFilter != null || _tagFilter.Any())
+    {
+        <p class="text-muted mb-2" style="font-size:.85rem">
+            @_results.Count Ergebnisse gefunden
+            @if (!string.IsNullOrWhiteSpace(_query)) { <span> für „@_query"</span> }
+        </p>
+    }
+
+    @if (_results.Count == 0 && (string.IsNullOrWhiteSpace(_query)))
+    {
+        <div class="empty-state">
+            <div class="empty-state-icon">🔎</div>
+            <h3>Suche starten</h3>
+            <p>Gib einen Suchbegriff ein – Name, Tag, Kategorie oder Beschreibung.</p>
+        </div>
+    }
+    else if (_results.Count == 0)
+    {
+        <div class="empty-state">
+            <div class="empty-state-icon">🤷</div>
+            <h3>Keine Treffer</h3>
+            <p>Versuche andere Schreibweisen oder entferne Filter.</p>
+        </div>
+    }
+    else
+    {
+        <div class="doc-grid">
+            @foreach (var doc in _results)
+            {
+                <div class="doc-card" @onclick="()=>_viewerDoc=doc">
+                    <div class="doc-card-thumb">@FileEmoji(doc.ContentType)</div>
+                    <div class="doc-card-body">
+                        <p class="doc-card-name" title="@doc.OriginalFileName">@doc.OriginalFileName</p>
+                        <div class="doc-card-meta">
+                            <span class="badge badge-category">@doc.Category</span>
+                        </div>
+                        @if (!string.IsNullOrEmpty(doc.Description))
+                        {
+                            <p class="text-muted" style="font-size:.75rem;margin:.3rem 0">
+                                @(doc.Description.Length > 60 ? doc.Description[..60] + "…" : doc.Description)
+                            </p>
+                        }
+                        <div class="doc-card-tags">
+                            @foreach (var t in doc.Tags)
+                            { <span class="tag">@t</span> }
+                        </div>
+                    </div>
+                    <div class="doc-card-actions" @onclick:stopPropagation>
+                        <button class="btn btn-ghost btn-sm" @onclick="()=>_viewerDoc=doc">👁</button>
+                        <a class="btn btn-ghost btn-sm" href="/api/documents/@doc.Id/file" target="_blank">⬇</a>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@if (_viewerDoc != null)
+{
+    <div class="viewer-overlay">
+        <div class="viewer-topbar">
+            <span class="viewer-title">@FileEmoji(_viewerDoc.ContentType) @_viewerDoc.OriginalFileName</span>
+            <span class="badge badge-category">@_viewerDoc.Category</span>
+            @foreach (var t in _viewerDoc.Tags) { <span class="tag">@t</span> }
+            <a class="btn btn-outline btn-sm" style="color:#fff;border-color:rgba(255,255,255,.4)"
+               href="/api/documents/@_viewerDoc.Id/file" target="_blank">⬇ Download</a>
+            <button class="btn btn-ghost btn-sm" style="color:#fff" @onclick="()=>_viewerDoc=null">✕ Schließen</button>
+        </div>
+        <div class="viewer-body">
+            @if (_viewerDoc.ContentType == "application/pdf")
+            { <iframe src="/api/documents/@_viewerDoc.Id/inline"></iframe> }
+            else if (_viewerDoc.ContentType.StartsWith("image/"))
+            { <img src="/api/documents/@_viewerDoc.Id/inline" alt="@_viewerDoc.OriginalFileName" /> }
+            else
+            {
+                <div class="viewer-unsupported">
+                    <div style="font-size:5rem">📄</div>
+                    <h2>@_viewerDoc.OriginalFileName</h2>
+                    <p>Keine Vorschau verfügbar.</p>
+                    <a class="btn btn-primary" href="/api/documents/@_viewerDoc.Id/file" target="_blank">⬇ Herunterladen</a>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private string _query = string.Empty;
+    private List<DocumentEntry> _results = new();
+    private string? _categoryFilter;
+    private HashSet<string> _tagFilter = new();
+    private HashSet<string> _allTags = new();
+    private DocumentEntry? _viewerDoc;
+
+    protected override void OnInitialized()
+    {
+        _allTags = DocService.GetAll().SelectMany(d => d.Tags).ToHashSet();
+    }
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? string.Empty;
+        DoSearch();
+    }
+
+    private void DoSearch()
+    {
+        var fuzzy = DocService.FuzzySearch(_query);
+
+        _results = fuzzy
+            .Where(d => _categoryFilter == null || d.Category == _categoryFilter)
+            .Where(d => !_tagFilter.Any() || _tagFilter.All(t => d.Tags.Contains(t)))
+            .ToList();
+    }
+
+    private void SetCategory(string? cat)
+    {
+        _categoryFilter = cat;
+        DoSearch();
+    }
+
+    private void ToggleTagFilter(string tag)
+    {
+        if (!_tagFilter.Add(tag)) _tagFilter.Remove(tag);
+        DoSearch();
+    }
+
+    private static string FileEmoji(string mime) => mime switch
+    {
+        "application/pdf" => "📕",
+        "image/png" or "image/jpeg" or "image/gif" or "image/webp" => "🖼",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "📝",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "📊",
+        _ when mime.StartsWith("text/") => "📄",
+        _ => "📎"
+    };
+}

@@ -1,0 +1,429 @@
+﻿@page "/"
+@using Dokument_Handler.Models
+@using Dokument_Handler.Services
+@inject DocumentService DocService
+@inject AiClassificationService AiService
+@rendermode InteractiveServer
+
+<PageTitle>DokuHandler – Übersicht</PageTitle>
+
+<div class="topbar">
+    <span class="topbar-title">📂 Übersicht</span>
+    <div class="search-wrapper">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input class="search-input" type="search" placeholder="Schnellsuche..." @bind="_quickSearch" @bind:event="oninput" />
+    </div>
+    @if (AiService?.IsEnabled == true)
+    {
+        <button class="btn btn-outline btn-sm" @onclick="RunAiBatchAsync" disabled="@_aiBatchRunning"
+                title="Alle PDFs per KI klassifizieren">
+            @if (_aiBatchRunning)
+            { <span>⏳ KI läuft…</span> }
+            else
+            { <span>🤖 Alle KI-taggen</span> }
+        </button>
+    }
+    <a href="/upload" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        Hochladen
+    </a>
+</div>
+
+<div class="page-body">
+    <!-- Stats -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:1rem;margin-bottom:1.5rem">
+        <div class="card" style="text-align:center">
+            <div style="font-size:2rem;font-weight:700;color:var(--primary)">@_all.Count</div>
+            <div class="text-muted" style="font-size:.85rem">Dokumente gesamt</div>
+        </div>
+        <div class="card" style="text-align:center">
+            <div style="font-size:2rem;font-weight:700;color:#10b981">@_categories.Count</div>
+            <div class="text-muted" style="font-size:.85rem">Kategorien</div>
+        </div>
+        <div class="card" style="text-align:center">
+            <div style="font-size:2rem;font-weight:700;color:#f59e0b">@_allTags.Count</div>
+            <div class="text-muted" style="font-size:.85rem">Einzigartige Tags</div>
+        </div>
+        <div class="card" style="text-align:center">
+            <div style="font-size:2rem;font-weight:700;color:#6366f1">@FormatSize(_totalSize)</div>
+            <div class="text-muted" style="font-size:.85rem">Gesamtgröße</div>
+        </div>
+    </div>
+
+    <!-- Recent / search results -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">
+                @if (!string.IsNullOrWhiteSpace(_quickSearch))
+                { <span>🔍 Suchergebnisse für „@_quickSearch"</span> }
+                else
+                { <span>Zuletzt hinzugefügt</span> }
+            </h2>
+            <div style="display:flex;gap:.5rem">
+                <button class="btn btn-ghost btn-sm @(_viewGrid ? "btn-outline" : "")" @onclick="()=>_viewGrid=true">⊞</button>
+                <button class="btn btn-ghost btn-sm @(!_viewGrid ? "btn-outline" : "")" @onclick="()=>_viewGrid=false">☰</button>
+            </div>
+        </div>
+
+        @if (_displayed.Count == 0)
+        {
+            <div class="empty-state">
+                <div class="empty-state-icon">📭</div>
+                <h3>Keine Dokumente gefunden</h3>
+                <p>Lade dein erstes Dokument hoch!</p>
+                <a href="/upload" class="btn btn-primary mt-2">Jetzt hochladen</a>
+            </div>
+        }
+        else if (_viewGrid)
+        {
+            <div class="doc-grid">
+                @foreach (var doc in _displayed)
+                {
+                    <div class="doc-card" @onclick="()=>OpenViewer(doc)">
+                        <div class="doc-card-thumb">@FileEmoji(doc.ContentType)</div>
+                        <div class="doc-card-body">
+                            <p class="doc-card-name" title="@doc.OriginalFileName">@doc.OriginalFileName</p>
+                            <div class="doc-card-meta">
+                                <span class="badge badge-category">@doc.Category</span>
+                                &nbsp;@doc.UploadedAt.ToString("dd.MM.yy")
+                            </div>
+                            <div class="doc-card-tags">
+                                @foreach (var t in doc.Tags.Take(3))
+                                { <span class="tag">@t</span> }
+                            </div>
+                        </div>
+                        <div class="doc-card-actions" @onclick:stopPropagation>
+                            <button class="btn btn-ghost btn-sm" @onclick="()=>OpenViewer(doc)" title="Anzeigen">👁</button>
+                            <a class="btn btn-ghost btn-sm" href="/api/documents/@doc.Id/file" target="_blank" title="Herunterladen">⬇</a>
+                            <button class="btn btn-ghost btn-sm" @onclick="()=>EditDoc(doc)" title="Bearbeiten">✏</button>
+                            <button class="btn btn-danger btn-sm" @onclick="()=>DeleteDoc(doc)" title="Löschen">🗑</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <table class="doc-table">
+                <thead>
+                    <tr>
+                        <th>Datei</th>
+                        <th>Kategorie</th>
+                        <th>Tags</th>
+                        <th>Größe</th>
+                        <th>Datum</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var doc in _displayed)
+                    {
+                        <tr>
+                            <td>
+                                <span style="cursor:pointer" @onclick="()=>OpenViewer(doc)">
+                                    @FileEmoji(doc.ContentType) @doc.OriginalFileName
+                                </span>
+                            </td>
+                            <td><span class="badge badge-category">@doc.Category</span></td>
+                            <td>
+                                @foreach (var t in doc.Tags.Take(3))
+                                { <span class="tag" style="margin-right:.2rem">@t</span> }
+                            </td>
+                            <td class="text-muted">@FormatSize(doc.FileSizeBytes)</td>
+                            <td class="text-muted">@doc.UploadedAt.ToString("dd.MM.yyyy")</td>
+                            <td style="white-space:nowrap">
+                                <button class="btn btn-ghost btn-sm" @onclick="()=>OpenViewer(doc)">👁</button>
+                                <a class="btn btn-ghost btn-sm" href="/api/documents/@doc.Id/file" target="_blank">⬇</a>
+                                <button class="btn btn-ghost btn-sm" @onclick="()=>EditDoc(doc)">✏</button>
+                                <button class="btn btn-danger btn-sm" @onclick="()=>DeleteDoc(doc)">🗑</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+<!-- Viewer -->
+@if (_viewerDoc != null)
+{
+    <div class="viewer-overlay">
+        <div class="viewer-topbar">
+            <span class="viewer-title">@FileEmoji(_viewerDoc.ContentType) @_viewerDoc.OriginalFileName</span>
+            <span class="badge badge-category">@_viewerDoc.Category</span>
+            @foreach (var t in _viewerDoc.Tags) { <span class="tag">@t</span> }
+            <a class="btn btn-outline btn-sm" style="color:#fff;border-color:rgba(255,255,255,.4)"
+               href="/api/documents/@_viewerDoc.Id/file" target="_blank">⬇ Download</a>
+            <button class="btn btn-ghost btn-sm" style="color:#fff" @onclick="()=>_viewerDoc=null">✕ Schließen</button>
+        </div>
+        <div class="viewer-body">
+            @{var mime = _viewerDoc.ContentType;}
+            @if (mime == "application/pdf")
+            {
+                <iframe src="/api/documents/@_viewerDoc.Id/inline" style="width:100%;height:100%"></iframe>
+            }
+            else if (mime.StartsWith("image/"))
+            {
+                <img src="/api/documents/@_viewerDoc.Id/inline" alt="@_viewerDoc.OriginalFileName" />
+            }
+            else
+            {
+                <div class="viewer-unsupported">
+                    <div style="font-size:5rem">📄</div>
+                    <h2>@_viewerDoc.OriginalFileName</h2>
+                    <p>Vorschau für diesen Dateityp nicht verfügbar.</p>
+                    <a class="btn btn-primary" href="/api/documents/@_viewerDoc.Id/file" target="_blank">⬇ Herunterladen</a>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+<!-- Edit Modal -->
+@if (_editDoc != null)
+{
+    <div class="modal-overlay" @onclick="()=>_editDoc=null">
+        <div class="modal" @onclick:stopPropagation>
+            <div class="modal-header">
+                <h3 class="modal-title">✏ Dokument bearbeiten</h3>
+                <button class="btn btn-ghost btn-sm" @onclick="()=>_editDoc=null">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Dateiname</label>
+                    <input class="form-control" @bind="_editDoc.OriginalFileName" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Kategorie</label>
+                    <select class="form-control" @bind="_editDoc.Category">
+                        @foreach (var c in DocService.GetCategories())
+                        { <option value="@c">@c</option> }
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Beschreibung</label>
+                    <textarea class="form-control" rows="2" @bind="_editDoc.Description"></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Tags</label>
+                    <div class="tag-input-wrapper" style="border:1px solid var(--border);border-radius:var(--radius);padding:.4rem .5rem">
+                        @foreach (var t in _editDoc.Tags)
+                        {
+                            var tag = t;
+                            <span class="tag">
+                                @tag
+                                <button class="tag-remove" @onclick="()=>_editDoc.Tags.Remove(tag)">×</button>
+                            </span>
+                        }
+                        <input class="form-control" style="border:none;padding:.1rem .3rem;flex:1;min-width:80px"
+                               placeholder="Tag + Enter" @bind="_newTag" @bind:event="oninput"
+                               @onkeydown="AddTagOnEnter" />
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @onclick="()=>_editDoc=null">Abbrechen</button>
+                <button class="btn btn-primary" @onclick="SaveEdit">Speichern</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_aiBatchRunning)
+{
+    <div style="position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;
+                background:#1e293b;color:#fff;border-radius:var(--radius);
+                box-shadow:0 8px 32px rgba(0,0,0,.35);padding:1.25rem 1.5rem;min-width:320px">
+        <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem">
+            <span style="font-size:1.5rem">🤖</span>
+            <div>
+                <div style="font-weight:600;font-size:.95rem">KI-Analyse läuft…</div>
+                <div style="font-size:.8rem;color:#94a3b8">@_aiBatchCurrent von @_aiBatchTotal PDFs</div>
+            </div>
+        </div>
+        <div style="background:rgba(255,255,255,.15);border-radius:99px;height:6px;overflow:hidden;margin-bottom:.5rem">
+            <div style="height:100%;border-radius:99px;background:#6366f1;
+                        width:@(_aiBatchPercent)%;transition:width .3s ease"></div>
+        </div>
+        <div style="font-size:.75rem;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            @_aiBatchStatusText
+        </div>
+    </div>
+}
+
+@if (_aiBatchDone)
+{
+    <div style="position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;
+                background:#14532d;color:#fff;border-radius:var(--radius);
+                box-shadow:0 8px 32px rgba(0,0,0,.35);padding:1.25rem 1.5rem;min-width:300px;
+                display:flex;align-items:center;gap:.75rem">
+        <span style="font-size:1.5rem">✅</span>
+        <div>
+            <div style="font-weight:600">KI-Analyse abgeschlossen</div>
+            <div style="font-size:.8rem;color:#86efac">@_aiBatchTotal PDFs klassifiziert</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" style="color:#fff;margin-left:auto"
+                @onclick="()=>_aiBatchDone=false">✕</button>
+    </div>
+}
+
+@code {
+    private List<DocumentEntry> _all = new();
+    private List<DocumentEntry> _displayed = new();
+    private List<string> _categories = new();
+    private HashSet<string> _allTags = new();
+    private long _totalSize;
+    private bool _viewGrid = true;
+    private string _quickSearch = string.Empty;
+    private DocumentEntry? _viewerDoc;
+    private DocumentEntry? _editDoc;
+    private string _newTag = string.Empty;
+
+    private bool _aiBatchRunning = false;
+    private bool _aiBatchDone = false;
+    private int _aiBatchCurrent = 0;
+    private int _aiBatchTotal = 0;
+    private int _aiBatchPercent = 0;
+    private string _aiBatchStatusText = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+    }
+
+    private void Refresh()
+    {
+        _all = DocService.FuzzySearch(string.Empty);
+        _categories = DocService.GetCategories().ToList();
+        _allTags = _all.SelectMany(d => d.Tags).ToHashSet();
+        _totalSize = _all.Sum(d => d.FileSizeBytes);
+        ApplySearch();
+    }
+
+    private void ApplySearch()
+    {
+        _displayed = string.IsNullOrWhiteSpace(_quickSearch)
+            ? _all.OrderByDescending(d => d.UploadedAt).ToList()
+            : DocService.FuzzySearch(_quickSearch);
+    }
+
+    private void OpenViewer(DocumentEntry doc) => _viewerDoc = doc;
+
+    private void EditDoc(DocumentEntry doc)
+    {
+        _editDoc = new DocumentEntry
+        {
+            Id = doc.Id,
+            FileName = doc.FileName,
+            OriginalFileName = doc.OriginalFileName,
+            Category = doc.Category,
+            Tags = new List<string>(doc.Tags),
+            Description = doc.Description,
+            FileSizeBytes = doc.FileSizeBytes,
+            ContentType = doc.ContentType,
+            RelativePath = doc.RelativePath,
+            UploadedAt = doc.UploadedAt
+        };
+    }
+
+    private void SaveEdit()
+    {
+        if (_editDoc == null) return;
+        DocService.UpdateEntry(_editDoc);
+        _editDoc = null;
+        Refresh();
+    }
+
+    private void DeleteDoc(DocumentEntry doc)
+    {
+        DocService.DeleteEntry(doc.Id);
+        Refresh();
+    }
+
+    private void AddTagOnEnter(KeyboardEventArgs e)
+    {
+        if ((e.Key == "Enter" || e.Key == ",") && !string.IsNullOrWhiteSpace(_newTag) && _editDoc != null)
+        {
+            var tag = _newTag.Trim().Trim(',');
+            if (!_editDoc.Tags.Contains(tag)) _editDoc.Tags.Add(tag);
+            _newTag = string.Empty;
+        }
+    }
+
+    private async Task RunAiBatchAsync()
+    {
+        if (_aiBatchRunning) return;
+        if (AiService is null || !AiService.IsEnabled) return;
+
+        var pdfs = _all
+            .Where(d => d.ContentType.Contains("pdf", StringComparison.OrdinalIgnoreCase)
+                        || d.OriginalFileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (pdfs.Count == 0) return;
+
+        _aiBatchRunning = true;
+        _aiBatchDone = false;
+        _aiBatchTotal = pdfs.Count;
+        _aiBatchCurrent = 0;
+        _aiBatchPercent = 0;
+        StateHasChanged();
+
+        var categories = DocService.GetCategories();
+
+        for (int i = 0; i < pdfs.Count; i++)
+        {
+            var doc = pdfs[i];
+            _aiBatchCurrent = i + 1;
+            _aiBatchPercent = (int)((i + 1) / (double)pdfs.Count * 100);
+            _aiBatchStatusText = doc.OriginalFileName;
+            StateHasChanged();
+
+            try
+            {
+                var fullPath = DocService.GetFullPath(doc);
+                if (!File.Exists(fullPath)) continue;
+
+                var result = await AiService.ClassifyDocumentAsync(fullPath, categories);
+                if (result != null)
+                {
+                    doc.Category = result.Category;
+                    doc.Tags = result.Tags;
+                    if (!string.IsNullOrWhiteSpace(result.Description))
+                        doc.Description = result.Description;
+                    DocService.UpdateEntry(doc);
+                }
+            }
+            catch { }
+        }
+
+        _aiBatchRunning = false;
+        _aiBatchDone = true;
+        Refresh();
+        StateHasChanged();
+    }
+
+    private static string FileEmoji(string mime) => mime switch
+    {
+        "application/pdf" => "📕",
+        "image/png" or "image/jpeg" or "image/gif" or "image/webp" => "🖼",
+        "application/zip" or "application/x-zip-compressed" => "📦",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "📝",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "📊",
+        _ when mime.StartsWith("text/") => "📄",
+        _ => "📎"
+    };
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
+        < 1024 * 1024 * 1024 => $"{bytes / 1024.0 / 1024.0:F1} MB",
+        _ => $"{bytes / 1024.0 / 1024.0 / 1024.0:F1} GB"
+    };
+}

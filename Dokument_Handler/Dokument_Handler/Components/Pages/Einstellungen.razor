@@ -1,0 +1,67 @@
+@page "/einstellungen"
+@using Dokument_Handler.Services
+@inject DocumentService DocService
+@rendermode InteractiveServer
+
+<PageTitle>Einstellungen - DokuHandler</PageTitle>
+
+<div class="topbar">
+    <span class="topbar-title">⚙ Kategorien verwalten</span>
+</div>
+
+<div class="page-body">
+    <div class="card" style="max-width:500px">
+        <h2 class="card-title mb-3">Kategorien</h2>
+
+        <div style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:1.25rem">
+            @foreach (var cat in DocService.GetCategories())
+            {
+                <div style="display:flex;align-items:center;justify-content:space-between;
+                            padding:.6rem .9rem;background:var(--bg);border:1px solid var(--border);
+                            border-radius:var(--radius)">
+                    <span>📁 @cat</span>
+                    <span class="text-muted" style="font-size:.8rem">
+                        @_counts.GetValueOrDefault(cat, 0) Dokumente
+                    </span>
+                </div>
+            }
+        </div>
+
+        <div style="display:flex;gap:.5rem">
+            <input class="form-control" placeholder="Neue Kategorie..."
+                   @bind="_newCategory" @bind:event="oninput"
+                   @onkeydown="@(e => { if (e.Key == "Enter") AddCategory(); })" />
+            <button class="btn btn-primary" @onclick="AddCategory"
+                    disabled="@string.IsNullOrWhiteSpace(_newCategory)">
+                + Hinzufügen
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(_msg))
+        {
+            <p style="color:var(--primary);margin-top:.5rem;font-size:.85rem">✓ @_msg</p>
+        }
+    </div>
+</div>
+
+@code {
+    private string _newCategory = string.Empty;
+    private string? _msg;
+    private Dictionary<string, int> _counts = new();
+
+    protected override void OnInitialized()
+    {
+        var all = DocService.GetAll();
+        _counts = DocService.GetCategories()
+            .ToDictionary(c => c, c => all.Count(d => d.Category == c));
+    }
+
+    private void AddCategory()
+    {
+        var name = _newCategory.Trim();
+        if (string.IsNullOrEmpty(name)) return;
+        DocService.AddCategory(name);
+        _counts[name] = 0;
+        _newCategory = string.Empty;
+        _msg = $"Kategorie \"{name}\" wurde hinzugefuegt.";
+    }
+}
