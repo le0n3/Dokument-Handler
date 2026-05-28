@@ -1,7 +1,5 @@
 <Solution>
-  <Folder Name="/Dokument_Handler/">
-    <Project Path="Dokument_Handler/Dokument_Handler.Tests/Dokument_Handler.Tests.csproj" />
-  </Folder>
   <Project Path="Dokument_Handler/Dokument_Handler.Client/Dokument_Handler.Client.csproj" />
+  <Project Path="Dokument_Handler/Dokument_Handler.Tests/Dokument_Handler.Tests.csproj" />
   <Project Path="Dokument_Handler/Dokument_Handler/Dokument_Handler.csproj" />
 </Solution>

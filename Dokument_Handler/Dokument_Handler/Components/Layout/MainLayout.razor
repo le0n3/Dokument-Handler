@@ -1,5 +1,8 @@
 ﻿@inherits LayoutComponentBase
+@using Dokument_Handler.Services
+@using Dokument_Handler.Shared
 @inject NavigationManager Nav
+@inject AuthService Auth
 
 <div class="app-layout">
     <nav class="sidebar">
@@ -67,7 +70,7 @@
                 </svg>
                 Steuern
             </NavLink>
-            <NavLink class="sidebar-link" href="/kategorie/Alle" style="opacity:.7;font-size:.82rem;padding-top:.3rem">
+            <NavLink class="sidebar-link" href="/kategorien" style="opacity:.7;font-size:.82rem;padding-top:.3rem">
                 + Alle anzeigen
             </NavLink>
 
@@ -79,6 +82,10 @@
                 </svg>
                 App-Einstellungen
             </NavLink>
+        </div>
+
+        <div class="sidebar-footer">
+            <ThemeToggleButton />
         </div>
     </nav>
 
@@ -92,3 +99,13 @@
     <a href="." class="reload">Reload</a>
     <span class="dismiss">🗙</span>
 </div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        if (!Auth.IsAuthenticated && !Nav.Uri.Contains("/login"))
+        {
+            Nav.NavigateTo("/login", replace: true);
+        }
+    }
+}

@@ -1,0 +1,77 @@
+@page "/kategorien"
+@using Dokument_Handler.Services
+@inject DocumentService DocService
+@rendermode InteractiveServer
+
+<PageTitle>Alle Kategorien – DokuHandler</PageTitle>
+
+<div class="topbar">
+    <span class="topbar-title">🗂 Alle Kategorien</span>
+    <a href="/upload" class="btn btn-primary btn-sm">+ Hochladen</a>
+</div>
+
+<div class="page-body">
+    @if (_categories.Count == 0)
+    {
+        <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <h3>Keine Kategorien vorhanden</h3>
+            <p>Lade dein erstes Dokument hoch!</p>
+            <a href="/upload" class="btn btn-primary mt-2">Jetzt hochladen</a>
+        </div>
+    }
+    else
+    {
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1.25rem">
+            @foreach (var cat in _categories)
+            {
+                var count = _counts.GetValueOrDefault(cat, 0);
+                <a href="/kategorie/@Uri.EscapeDataString(cat)" class="card" style="text-decoration:none;display:flex;flex-direction:column;gap:.5rem;cursor:pointer">
+                    <div style="display:flex;align-items:center;gap:.75rem">
+                        <span style="font-size:2rem">@CategoryIcon(cat)</span>
+                        <div style="min-width:0">
+                            <div style="font-weight:700;font-size:1rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@cat</div>
+                            <div style="font-size:.8rem;color:var(--text-muted)">@count Dokument@(count == 1 ? "" : "e")</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:.25rem">
+                        <div style="background:var(--bg-secondary);border-radius:var(--radius-full);height:5px;overflow:hidden">
+                            <div style="height:100%;border-radius:var(--radius-full);background:linear-gradient(90deg,var(--primary),var(--accent));width:@(BarWidth(count))%"></div>
+                        </div>
+                    </div>
+                </a>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<string> _categories = new();
+    private Dictionary<string, int> _counts = new();
+    private int _maxCount = 1;
+
+    protected override void OnInitialized()
+    {
+        _categories = DocService.GetCategories().OrderBy(c => c).ToList();
+        _counts = _categories.ToDictionary(
+            c => c,
+            c => DocService.GetAll().Count(d => d.Category == c));
+        _maxCount = _counts.Values.DefaultIfEmpty(1).Max();
+        if (_maxCount == 0) _maxCount = 1;
+    }
+
+    private int BarWidth(int count) =>
+        (int)Math.Round(count / (double)_maxCount * 100);
+
+    private static string CategoryIcon(string name) => name.ToLower() switch
+    {
+        "rechnungen" => "💶",
+        "verträge"   => "📜",
+        "steuern"    => "🧾",
+        "bilder"     => "🖼",
+        "fotos"      => "📷",
+        "berichte"   => "📊",
+        "alle"       => "📂",
+        _            => "📁"
+    };
+}

@@ -1,0 +1,80 @@
+@page "/login"
+@rendermode InteractiveServer
+@using Dokument_Handler.Services
+@inject AuthService Auth
+@inject NavigationManager Nav
+
+<PageTitle>Login</PageTitle>
+
+<div class="login-container">
+    <div class="login-box">
+        <h2>🔒 Dokument-Handler</h2>
+        <p>Bitte gib dein Passwort ein, um fortzufahren.</p>
+
+        <EditForm Model="this" OnSubmit="HandleLogin">
+            <div class="mb-3">
+                <input type="password"
+                       class="form-control @(showError ? "is-invalid" : "")"
+                       placeholder="Passwort"
+                       @bind="password"
+                       @bind:event="oninput" />
+                @if (showError)
+                {
+                    <div class="invalid-feedback">Falsches Passwort. Bitte erneut versuchen.</div>
+                }
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Anmelden</button>
+        </EditForm>
+    </div>
+</div>
+
+<style>
+    .login-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        background: #f0f2f5;
+    }
+
+    .login-box {
+        background: white;
+        padding: 2rem 2.5rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        width: 100%;
+        max-width: 380px;
+        text-align: center;
+    }
+
+    .login-box h2 {
+        margin-bottom: 0.5rem;
+    }
+
+    .login-box p {
+        color: #666;
+        margin-bottom: 1.5rem;
+    }
+</style>
+
+@code {
+    private string password = string.Empty;
+    private bool showError;
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private void HandleLogin()
+    {
+        if (Auth.Login(password))
+        {
+            var target = string.IsNullOrWhiteSpace(ReturnUrl) ? "/" : ReturnUrl;
+            Nav.NavigateTo(target);
+        }
+        else
+        {
+            showError = true;
+            password = string.Empty;
+        }
+    }
+}

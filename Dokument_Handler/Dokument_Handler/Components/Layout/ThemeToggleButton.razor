@@ -1,0 +1,53 @@
+@using Dokument_Handler.Shared
+@inject IThemeService ThemeService
+@implements IAsyncDisposable
+@rendermode InteractiveServer
+
+<button type="button"
+        class="theme-toggle"
+        @onclick="ToggleTheme"
+        title="Theme wechseln"
+        aria-label="Theme wechseln">
+</button>
+
+@code {
+    private bool _isInitialized = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !_isInitialized)
+        {
+            _isInitialized = true;
+            try
+            {
+                await ThemeService.InitializeAsync();
+                ThemeService.OnThemeChanged += StateHasChanged;
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Theme initialization error: {ex.Message}");
+            }
+        }
+    }
+
+    private async Task ToggleTheme()
+    {
+        try
+        {
+            await ThemeService.ToggleThemeAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Theme toggle error: {ex.Message}");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_isInitialized)
+        {
+            ThemeService.OnThemeChanged -= StateHasChanged;
+        }
+    }
+}

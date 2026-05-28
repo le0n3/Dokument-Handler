@@ -4,8 +4,10 @@ using Dokument_Handler.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<DocumentService>();
+builder.Services.AddScoped<Dokument_Handler.Shared.IThemeService, ThemeService>();
 builder.Services.AddHostedService<EmailImportService>();
 
 // HttpClient-Fabrik + explizite DI-Registrierung für den KI-Service

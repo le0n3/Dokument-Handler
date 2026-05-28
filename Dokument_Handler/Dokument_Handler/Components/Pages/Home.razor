@@ -53,6 +53,24 @@
             <div style="font-size:2rem;font-weight:700;color:#6366f1">@FormatSize(_totalSize)</div>
             <div class="text-muted" style="font-size:.85rem">Gesamtgröße</div>
         </div>
+        <div class="card" style="text-align:center">
+            <div style="font-size:2rem;font-weight:700;color:#ef4444">@_pdfCount</div>
+            <div class="text-muted" style="font-size:.85rem">PDFs gesamt</div>
+        </div>
+        <div class="card" style="text-align:center">
+            <div style="font-size:2rem;font-weight:700;color:#06b6d4">@_thisWeekCount</div>
+            <div class="text-muted" style="font-size:.85rem">Diese Woche neu</div>
+        </div>
+        <div class="card" style="text-align:center">
+            <div style="font-size:2rem;font-weight:700;color:#8b5cf6">@FormatSize(_avgSize)</div>
+            <div class="text-muted" style="font-size:.85rem">⌀ Dateigröße</div>
+        </div>
+        <div class="card" style="text-align:center;cursor:pointer" @onclick="NavigateToNewest" title="@(_newestDoc?.OriginalFileName ?? "–")">
+            <div style="font-size:1.1rem;font-weight:700;color:#f97316;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 .25rem">
+                @(_newestDoc?.OriginalFileName ?? "–")
+            </div>
+            <div class="text-muted" style="font-size:.85rem">Zuletzt hochgeladen</div>
+        </div>
     </div>
 
     <!-- Recent / search results -->
@@ -327,6 +345,10 @@
     private List<string> _categories = new();
     private HashSet<string> _allTags = new();
     private long _totalSize;
+    private long _avgSize;
+    private int _pdfCount;
+    private int _thisWeekCount;
+    private DocumentEntry? _newestDoc;
     private bool _viewGrid = true;
     private string _quickSearch = string.Empty;
     private DocumentEntry? _viewerDoc;
@@ -351,6 +373,10 @@
         _categories = DocService.GetCategories().ToList();
         _allTags = _all.SelectMany(d => d.Tags).ToHashSet();
         _totalSize = _all.Sum(d => d.FileSizeBytes);
+        _avgSize = _all.Count > 0 ? _totalSize / _all.Count : 0;
+        _pdfCount = _all.Count(d => d.ContentType == "application/pdf" || d.OriginalFileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
+        _thisWeekCount = _all.Count(d => d.UploadedAt >= DateTime.Now.AddDays(-7));
+        _newestDoc = _all.OrderByDescending(d => d.UploadedAt).FirstOrDefault();
         ApplySearch();
     }
 
@@ -367,6 +393,12 @@
     {
         _quickSearch = e.Value?.ToString() ?? string.Empty;
         ApplySearch();
+    }
+
+    private void NavigateToNewest()
+    {
+        if (_newestDoc != null)
+            OpenViewer(_newestDoc);
     }
 
     private void OpenViewer(DocumentEntry doc) => _viewerDoc = doc;
