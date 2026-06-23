@@ -3,11 +3,18 @@ using Dokument_Handler.Models;
 
 namespace Dokument_Handler.Services;
 
+/// <summary>
+/// Handles all document storage operations: upload, retrieval, update, deletion, and search.
+/// Metadata is persisted as JSON in <c>_metadata.json</c> inside the configured storage root.
+/// All public methods are thread-safe.
+/// </summary>
 public class DocumentService
 {
     private const string EmailCategory = "E-Mail";
     private readonly IWebHostEnvironment _env;
     private readonly AppSettingsService _settingsService;
+
+    // Lock object used to serialise all access to _store and the file system.
     private readonly object _sync = new();
 
     private string _storageRoot = string.Empty;
@@ -21,6 +28,10 @@ public class DocumentService
         EnsureStoreLoaded();
     }
 
+    /// <summary>
+    /// Ensures the store is initialised for the currently configured storage root.
+    /// Reloads from disk when the root path has changed or the metadata file is missing.
+    /// </summary>
     private void EnsureStoreLoaded()
     {
         var configured = _settingsService.GetStorageOptions().RootPath?.Trim() ?? string.Empty;
@@ -67,6 +78,7 @@ public class DocumentService
         File.WriteAllText(_metaFile, json);
     }
 
+    /// <summary>Returns a read-only snapshot of all stored document entries.</summary>
     public IReadOnlyList<DocumentEntry> GetAll()
     {
         lock (_sync)
@@ -76,6 +88,7 @@ public class DocumentService
         }
     }
 
+    /// <summary>Returns a read-only list of all available category names.</summary>
     public IReadOnlyList<string> GetCategories()
     {
         lock (_sync)
@@ -85,6 +98,10 @@ public class DocumentService
         }
     }
 
+    /// <summary>
+    /// Returns the document entry with the given <paramref name="id"/>,
+    /// or <see langword="null"/> if no matching entry exists.
+    /// </summary>
     public DocumentEntry? GetById(Guid id)
     {
         lock (_sync)
@@ -94,6 +111,10 @@ public class DocumentService
         }
     }
 
+    /// <summary>
+    /// Stores the uploaded file stream on disk and creates a new <see cref="DocumentEntry"/>.
+    /// The file is written outside the metadata lock to avoid blocking other readers.
+    /// </summary>
     public async Task<DocumentEntry> UploadAsync(Stream fileStream, string originalFileName,
         string category, List<string> tags, string description, string contentType)
     {
@@ -140,6 +161,10 @@ public class DocumentService
         return entry;
     }
 
+    /// <summary>
+    /// Uploads a file stream as an email attachment, placing it in the "E-Mail" category.
+    /// The category is created automatically if it does not exist yet.
+    /// </summary>
     public async Task<DocumentEntry> UploadEmailAttachmentAsync(
         Stream fileStream,
         string originalFileName,
@@ -160,6 +185,10 @@ public class DocumentService
             contentType);
     }
 
+    /// <summary>
+    /// Updates the metadata of an existing entry and moves the file to the new category
+    /// directory when the category has changed.
+    /// </summary>
     public void UpdateEntry(DocumentEntry updated)
     {
         lock (_sync)
@@ -175,6 +204,7 @@ public class DocumentService
 
             if (!string.Equals(existing.Category, updated.Category, StringComparison.OrdinalIgnoreCase))
             {
+                // Move the physical file when the category (and therefore directory) changes.
                 var oldPath = Path.Combine(oldCategoryDir, existing.FileName);
                 var newPath = Path.Combine(newCategoryDir, existing.FileName);
                 if (File.Exists(oldPath)) File.Move(oldPath, newPath);
@@ -189,6 +219,7 @@ public class DocumentService
         }
     }
 
+    /// <summary>Removes a document entry and deletes the corresponding file from disk.</summary>
     public void DeleteEntry(Guid id)
     {
         lock (_sync)
@@ -206,6 +237,7 @@ public class DocumentService
         }
     }
 
+    /// <summary>Returns the absolute file system path for a given document entry.</summary>
     public string GetFullPath(DocumentEntry entry)
     {
         lock (_sync)
@@ -215,6 +247,10 @@ public class DocumentService
         }
     }
 
+    /// <summary>
+    /// Adds a new category and creates its directory on disk.
+    /// Does nothing if the category already exists.
+    /// </summary>
     public void AddCategory(string category)
     {
         lock (_sync)
@@ -230,6 +266,11 @@ public class DocumentService
         }
     }
 
+    /// <summary>
+    /// Performs a fuzzy search across file name, description, tags, and category.
+    /// Returns all documents when <paramref name="query"/> is empty, otherwise returns
+    /// results ordered by relevance score (highest first).
+    /// </summary>
     public List<DocumentEntry> FuzzySearch(string query)
     {
         lock (_sync)
@@ -249,6 +290,10 @@ public class DocumentService
         }
     }
 
+    /// <summary>
+    /// Calculates a relevance score for <paramref name="doc"/> against the lowercase <paramref name="query"/>.
+    /// Higher-priority fields (file name, tags) contribute more to the score than lower-priority ones.
+    /// </summary>
     private static int FuzzyScore(DocumentEntry doc, string query)
     {
         int score = 0;
@@ -279,6 +324,10 @@ public class DocumentService
         return score;
     }
 
+    /// <summary>
+    /// Returns <see langword="true"/> when all characters of <paramref name="needle"/>
+    /// appear in order within <paramref name="haystack"/>.
+    /// </summary>
     private static bool IsSubsequence(string needle, string haystack)
     {
         int ni = 0;
@@ -290,6 +339,7 @@ public class DocumentService
         return false;
     }
 
+    /// <summary>Replaces characters that are invalid in file/directory names with underscores.</summary>
     private static string Sanitize(string name) =>
         string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
 }

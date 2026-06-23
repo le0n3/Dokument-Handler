@@ -6,21 +6,50 @@ using MimeKit;
 
 namespace Dokument_Handler.Services;
 
+/// <summary>
+/// Configuration options for the IMAP email import feature.
+/// Corresponds to the <c>EmailImport</c> section in <c>appsettings.json</c>.
+/// </summary>
 public class EmailImportOptions
 {
+    /// <summary>Gets or sets a value indicating whether the email import is active.</summary>
     public bool Enabled { get; set; } = false;
+
+    /// <summary>Gets or sets the IMAP server hostname.</summary>
     public string Host { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the IMAP server port (default: 993).</summary>
     public int Port { get; set; } = 993;
+
+    /// <summary>Gets or sets a value indicating whether SSL/TLS is used (legacy; prefer <see cref="Security"/>).</summary>
     public bool UseSsl { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the socket security mode as a string (e.g. <c>"Auto"</c>, <c>"SslOnConnect"</c>, <c>"StartTls"</c>).
+    /// Takes precedence over <see cref="UseSsl"/> when parseable.
+    /// </summary>
     public string Security { get; set; } = "Auto";
+
+    /// <summary>Gets or sets a value indicating whether invalid server certificates are accepted (for test environments only).</summary>
     public bool AllowInvalidCertificate { get; set; } = false;
+
+    /// <summary>Gets or sets the IMAP login username.</summary>
     public string Username { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the IMAP login password.</summary>
     public string Password { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the mailbox folder to poll (default: <c>"INBOX"</c>).</summary>
     public string Mailbox { get; set; } = "INBOX";
-    /// <summary>Poll interval in seconds (default: 60)</summary>
+
+    /// <summary>Gets or sets the poll interval in seconds (default: 60).</summary>
     public int PollIntervalSeconds { get; set; } = 60;
 }
 
+/// <summary>
+/// Background service that periodically polls an IMAP mailbox and imports
+/// all unseen message attachments into the document store.
+/// </summary>
 public class EmailImportService : BackgroundService
 {
     private readonly ILogger<EmailImportService> _logger;
@@ -37,6 +66,7 @@ public class EmailImportService : BackgroundService
         _settingsService = settingsService;
     }
 
+    /// <inheritdoc/>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("EmailImportService gestartet.");
@@ -99,7 +129,7 @@ public class EmailImportService : BackgroundService
         var folder = await client.GetFolderAsync(options.Mailbox, ct);
         await folder.OpenAsync(FolderAccess.ReadWrite, ct);
 
-        // Fetch only unseen messages
+        // Fetch only unseen messages to avoid re-importing already processed attachments.
         var uids = await folder.SearchAsync(SearchQuery.NotSeen, ct);
 
         if (uids.Count == 0)
@@ -117,7 +147,7 @@ public class EmailImportService : BackgroundService
             var message = (MimeMessage)await folder.GetMessageAsync(summary.UniqueId, ct);
             await ProcessMessageAsync(message, ct);
 
-            // Mark as seen so it won't be imported again
+            // Mark the message as seen so it is not imported again on the next poll.
             await folder.AddFlagsAsync(summary.UniqueId, MessageFlags.Seen, true, ct);
         }
 
@@ -154,7 +184,7 @@ public class EmailImportService : BackgroundService
             }
             else
             {
-                // Multipart attachment (e.g. message/rfc822) – serialize as .eml
+                // Multipart attachments (e.g. message/rfc822) are serialized as .eml files.
                 await attachment.WriteToAsync(memStream, ct);
                 if (!fileName.EndsWith(".eml", StringComparison.OrdinalIgnoreCase))
                     fileName += ".eml";
@@ -169,6 +199,9 @@ public class EmailImportService : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Builds a human-readable description from the email sender, subject, and date.
+    /// </summary>
     private static string BuildDescription(MimeMessage message)
     {
         var parts = new List<string>();
@@ -185,6 +218,10 @@ public class EmailImportService : BackgroundService
         return string.Join(" | ", parts);
     }
 
+    /// <summary>
+    /// Resolves the <see cref="SecureSocketOptions"/> from the string value in
+    /// <see cref="EmailImportOptions.Security"/>, falling back to <see cref="EmailImportOptions.UseSsl"/>.
+    /// </summary>
     private static SecureSocketOptions ResolveSocketOptions(EmailImportOptions options)
     {
         if (!string.IsNullOrWhiteSpace(options.Security)

@@ -7,23 +7,51 @@ using UglyToad.PdfPig;
 
 namespace Dokument_Handler.Services;
 
+/// <summary>
+/// Configuration options for the AI document classification feature.
+/// Corresponds to the <c>AiClassification</c> section in <c>appsettings.json</c>.
+/// </summary>
 public class AiClassificationOptions
 {
+    /// <summary>Gets or sets a value indicating whether AI features are enabled.</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>Gets or sets the base URL of the OpenAI-compatible API endpoint.</summary>
     public string ApiBaseUrl { get; set; } = "https://api.openai.com/v1";
+
+    /// <summary>Gets or sets the API key used for authentication.</summary>
     public string ApiKey { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the model identifier to use for chat completions.</summary>
     public string Model { get; set; } = "llama3.2";
+
+    /// <summary>Gets or sets the maximum number of characters extracted from a PDF before truncation.</summary>
     public int MaxTextChars { get; set; } = 4000;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to request a structured JSON response
+    /// from the API (requires model support).
+    /// </summary>
     public bool UseJsonFormat { get; set; } = false;
 }
 
+/// <summary>The classification result returned by the LLM for a single document.</summary>
 public class AiClassificationResult
 {
+    /// <summary>Gets or sets the assigned category name.</summary>
     public string Category { get; set; } = "Allgemein";
+
+    /// <summary>Gets or sets the list of descriptive tags suggested by the model.</summary>
     public List<string> Tags { get; set; } = new();
+
+    /// <summary>Gets or sets a short description of the document content.</summary>
     public string Description { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// Communicates with an OpenAI-compatible LLM API to classify PDF documents
+/// and suggest file names.
+/// </summary>
 public class AiClassificationService
 {
     private readonly HttpClient _http;
@@ -40,6 +68,10 @@ public class AiClassificationService
         _logger = logger;
     }
 
+    /// <summary>
+    /// Gets a value indicating whether AI classification is currently enabled and properly configured.
+    /// Returns <see langword="false"/> when the API key is missing or still a placeholder.
+    /// </summary>
     public bool IsEnabled
     {
         get
@@ -52,8 +84,9 @@ public class AiClassificationService
     }
 
     /// <summary>
-    /// Extrahiert Text aus einem PDF und lässt ihn vom LLM klassifizieren.
-    /// Gibt null zurück wenn das Feature deaktiviert ist oder ein Fehler auftritt.
+    /// Extracts text from a PDF file and asks the configured LLM to classify it.
+    /// Returns <see langword="null"/> when the feature is disabled, no text could be
+    /// extracted, or an error occurs.
     /// </summary>
     public async Task<AiClassificationResult?> ClassifyDocumentAsync(
         string filePath,
@@ -82,8 +115,13 @@ public class AiClassificationService
         }
     }
 
+    /// <summary>
+    /// Reads pages from the PDF until <paramref name="maxTextChars"/> characters have been
+    /// collected, then truncates the result to that limit.
+    /// </summary>
     private string ExtractPdfText(string filePath, int maxTextChars)
     {
+        // Enforce a minimum of 500 characters so the LLM has enough context.
         var cappedMax = Math.Max(500, maxTextChars);
         var sb = new StringBuilder();
         using var doc = PdfDocument.Open(filePath);
@@ -97,6 +135,10 @@ public class AiClassificationService
             : sb.ToString();
     }
 
+    /// <summary>
+    /// Sends the extracted PDF text to the LLM and parses the structured JSON response
+    /// into an <see cref="AiClassificationResult"/>.
+    /// </summary>
     private async Task<AiClassificationResult?> CallLlmAsync(
         string pdfText,
         IReadOnlyList<string> availableCategories,
@@ -118,6 +160,7 @@ public class AiClassificationService
             "- Tags: 2-5 relevante Stichworte auf Deutsch, Kleinschreibung.\n" +
             "- Beschreibung: prägnant, auf Deutsch.";
 
+        // Build the request body with or without the structured JSON response format hint.
         object requestBody = options.UseJsonFormat
             ? new
             {
@@ -158,6 +201,7 @@ public class AiClassificationService
             .GetProperty("content")
             .GetString() ?? "{}";
 
+        // Strip optional Markdown code fences that some models include in their response.
         var jsonMatch = Regex.Match(messageContent, @"```(?:json)?\s*(\{.*?\})\s*```", RegexOptions.Singleline);
         if (jsonMatch.Success)
             messageContent = jsonMatch.Groups[1].Value;
@@ -173,6 +217,11 @@ public class AiClassificationService
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
     }
 
+    /// <summary>
+    /// Extracts text from a PDF at <paramref name="filePath"/> and asks the LLM to
+    /// suggest a short, filesystem-safe file name without extension.
+    /// Returns <see langword="null"/> when the feature is disabled or an error occurs.
+    /// </summary>
     public async Task<string?> SuggestDocumentNameAsync(string filePath)
     {
         var options = _settingsService.GetAiClassificationOptions();
@@ -220,6 +269,7 @@ public class AiClassificationService
             if (string.IsNullOrWhiteSpace(raw))
                 return null;
 
+            // Sanitize the suggestion: remove whitespace, quotes, and invalid filename characters.
             var name = raw.Trim();
             name = name.Replace("\r", " ").Replace("\n", " ").Trim();
             name = name.Trim('"', '\'', '`');
@@ -249,6 +299,10 @@ public class AiClassificationService
         return request;
     }
 
+    /// <summary>
+    /// Builds the full chat/completions URI from the configured base URL,
+    /// defaulting to the local Ollama endpoint when the base URL is not set.
+    /// </summary>
     private static Uri BuildChatCompletionsUri(string apiBaseUrl)
     {
         var baseUrl = string.IsNullOrWhiteSpace(apiBaseUrl)
