@@ -26,7 +26,7 @@ public class ThemeService : IThemeService
     public string CurrentTheme => _currentTheme;
 
     /// <summary>
-    /// Reads the persisted theme from the browser and initialises the service.
+    /// Reads the persisted theme from the browser and initializes the service.
     /// Subsequent calls are no-ops.
     /// </summary>
     public async Task InitializeAsync()
