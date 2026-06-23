@@ -7,35 +7,35 @@ namespace Dokument_Handler.Controllers;
 [Route("api/ai")]
 public class AiClassificationController : ControllerBase
 {
-    private readonly DocumentService _svc;
-    private readonly AiClassificationService _ai;
+    private readonly DocumentService _documentService;
+    private readonly AiClassificationService _aiService;
 
-    public AiClassificationController(DocumentService svc, AiClassificationService ai)
+    public AiClassificationController(DocumentService documentService, AiClassificationService aiService)
     {
-        _svc = svc;
-        _ai = ai;
+        _documentService = documentService;
+        _aiService = aiService;
     }
 
     /// <summary>
-    /// Klassifiziert ein einzelnes Dokument per ID mit dem LLM.
+    /// Classifies a single document by its ID using the configured LLM.
     /// </summary>
     [HttpPost("classify/{id:guid}")]
     public async Task<IActionResult> ClassifyOne(Guid id)
     {
-        if (!_ai.IsEnabled)
+        if (!_aiService.IsEnabled)
             return BadRequest("AI-Klassifizierung ist nicht aktiviert. Bitte ApiKey in appsettings.json setzen.");
 
-        var entry = _svc.GetById(id);
+        var entry = _documentService.GetById(id);
         if (entry == null) return NotFound();
 
-        var fullPath = _svc.GetFullPath(entry);
+        var fullPath = _documentService.GetFullPath(entry);
         if (!System.IO.File.Exists(fullPath)) return NotFound("Datei nicht gefunden.");
 
         if (!entry.ContentType.Contains("pdf", StringComparison.OrdinalIgnoreCase)
             && !entry.OriginalFileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
             return BadRequest("Nur PDF-Dateien werden unterstützt.");
 
-        var result = await _ai.ClassifyDocumentAsync(fullPath, _svc.GetCategories());
+        var result = await _aiService.ClassifyDocumentAsync(fullPath, _documentService.GetCategories());
         if (result == null)
             return StatusCode(500, "AI-Klassifizierung hat kein Ergebnis zurückgegeben.");
 
@@ -44,7 +44,7 @@ public class AiClassificationController : ControllerBase
         if (!string.IsNullOrWhiteSpace(result.Description))
             entry.Description = result.Description;
 
-        _svc.UpdateEntry(entry);
+        _documentService.UpdateEntry(entry);
 
         return Ok(new
         {
@@ -57,26 +57,26 @@ public class AiClassificationController : ControllerBase
     }
 
     /// <summary>
-    /// Klassifiziert ALLE PDFs im System per Batch.
-    /// Gibt einen Fortschritts-Bericht zurück.
+    /// Classifies all PDF documents in the system in a single batch.
+    /// Returns a progress report with the status of each document.
     /// </summary>
     [HttpPost("classify-all")]
     public async Task<IActionResult> ClassifyAll()
     {
-        if (!_ai.IsEnabled)
+        if (!_aiService.IsEnabled)
             return BadRequest("AI-Klassifizierung ist nicht aktiviert. Bitte ApiKey in appsettings.json setzen.");
 
-        var allDocs = _svc.GetAll()
+        var allDocs = _documentService.GetAll()
             .Where(d => d.ContentType.Contains("pdf", StringComparison.OrdinalIgnoreCase)
                         || d.OriginalFileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         var results = new List<object>();
-        var categories = _svc.GetCategories();
+        var categories = _documentService.GetCategories();
 
         foreach (var entry in allDocs)
         {
-            var fullPath = _svc.GetFullPath(entry);
+            var fullPath = _documentService.GetFullPath(entry);
             if (!System.IO.File.Exists(fullPath))
             {
                 results.Add(new { entry.Id, entry.OriginalFileName, Status = "Datei fehlt" });
@@ -85,7 +85,7 @@ public class AiClassificationController : ControllerBase
 
             try
             {
-                var result = await _ai.ClassifyDocumentAsync(fullPath, categories);
+                var result = await _aiService.ClassifyDocumentAsync(fullPath, categories);
                 if (result == null)
                 {
                     results.Add(new { entry.Id, entry.OriginalFileName, Status = "Kein Text extrahiert" });
@@ -97,7 +97,7 @@ public class AiClassificationController : ControllerBase
                 if (!string.IsNullOrWhiteSpace(result.Description))
                     entry.Description = result.Description;
 
-                _svc.UpdateEntry(entry);
+                _documentService.UpdateEntry(entry);
 
                 results.Add(new
                 {
@@ -124,11 +124,11 @@ public class AiClassificationController : ControllerBase
     }
 
     /// <summary>
-    /// Gibt zurück ob der AI-Service aktiv ist.
+    /// Returns whether the AI classification service is currently enabled and configured.
     /// </summary>
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
-        return Ok(new { Enabled = _ai.IsEnabled });
+        return Ok(new { Enabled = _aiService.IsEnabled });
     }
 }

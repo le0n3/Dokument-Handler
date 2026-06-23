@@ -3,18 +3,32 @@ using System.Text.Json.Nodes;
 
 namespace Dokument_Handler.Services;
 
+/// <summary>Holds the configured path for the document storage root directory.</summary>
 public class StorageOptions
 {
+    /// <summary>Gets or sets the absolute path to the root storage directory. Empty means use the application default.</summary>
     public string RootPath { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// A snapshot of all configurable application settings, read from or written to <c>appsettings.json</c>.
+/// </summary>
 public class AppSettingsSnapshot
 {
+    /// <summary>Gets or sets the document storage configuration.</summary>
     public StorageOptions Storage { get; set; } = new();
+
+    /// <summary>Gets or sets the IMAP email import configuration.</summary>
     public EmailImportOptions EmailImport { get; set; } = new();
+
+    /// <summary>Gets or sets the AI classification configuration.</summary>
     public AiClassificationOptions AiClassification { get; set; } = new();
 }
 
+/// <summary>
+/// Reads and writes application settings from <c>appsettings.json</c> at runtime.
+/// All reads and writes are thread-safe.
+/// </summary>
 public class AppSettingsService
 {
     private readonly IWebHostEnvironment _env;
@@ -28,6 +42,10 @@ public class AppSettingsService
 
     private string SettingsPath => Path.Combine(_env.ContentRootPath, "appsettings.json");
 
+    /// <summary>
+    /// Reads and returns all settings sections from <c>appsettings.json</c>.
+    /// Missing sections are returned with their default values.
+    /// </summary>
     public AppSettingsSnapshot GetSettings()
     {
         lock (_sync)
@@ -42,12 +60,19 @@ public class AppSettingsService
         }
     }
 
+    /// <summary>Returns the storage configuration section.</summary>
     public StorageOptions GetStorageOptions() => GetSettings().Storage;
 
+    /// <summary>Returns the email import configuration section.</summary>
     public EmailImportOptions GetEmailImportOptions() => GetSettings().EmailImport;
 
+    /// <summary>Returns the AI classification configuration section.</summary>
     public AiClassificationOptions GetAiClassificationOptions() => GetSettings().AiClassification;
 
+    /// <summary>
+    /// Persists all sections of <paramref name="settings"/> to <c>appsettings.json</c>,
+    /// preserving any unrelated keys already present in the file.
+    /// </summary>
     public Task SaveSettingsAsync(AppSettingsSnapshot settings)
     {
         lock (_sync)

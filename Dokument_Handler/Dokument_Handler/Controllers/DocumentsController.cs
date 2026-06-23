@@ -7,30 +7,36 @@ namespace Dokument_Handler.Controllers;
 [Route("api/[controller]")]
 public class DocumentsController : ControllerBase
 {
-    private readonly DocumentService _svc;
+    private readonly DocumentService _documentService;
 
-    public DocumentsController(DocumentService svc) => _svc = svc;
+    public DocumentsController(DocumentService documentService) => _documentService = documentService;
 
+    /// <summary>
+    /// Returns the file for the given document ID as a download attachment.
+    /// </summary>
     [HttpGet("{id}/file")]
     public IActionResult GetFile(Guid id)
     {
-        var entry = _svc.GetById(id);
+        var entry = _documentService.GetById(id);
         if (entry == null) return NotFound();
 
-        var path = _svc.GetFullPath(entry);
+        var path = _documentService.GetFullPath(entry);
         if (!System.IO.File.Exists(path)) return NotFound();
 
         var stream = System.IO.File.OpenRead(path);
         return File(stream, entry.ContentType, entry.OriginalFileName);
     }
 
+    /// <summary>
+    /// Returns the file for the given document ID as an inline view (e.g. for PDF/image preview).
+    /// </summary>
     [HttpGet("{id}/inline")]
     public IActionResult GetInline(Guid id)
     {
-        var entry = _svc.GetById(id);
+        var entry = _documentService.GetById(id);
         if (entry == null) return NotFound();
 
-        var path = _svc.GetFullPath(entry);
+        var path = _documentService.GetFullPath(entry);
         if (!System.IO.File.Exists(path)) return NotFound();
 
         var stream = System.IO.File.OpenRead(path);
@@ -38,6 +44,10 @@ public class DocumentsController : ControllerBase
         return File(stream, entry.ContentType);
     }
 
+    /// <summary>
+    /// Accepts one or more email attachments sent via an email client integration
+    /// and stores them as documents in the "E-Mail" category.
+    /// </summary>
     [HttpPost("email")]
     [RequestSizeLimit(100_000_000)]
     public async Task<IActionResult> UploadEmailAttachments(
@@ -49,6 +59,8 @@ public class DocumentsController : ControllerBase
             return BadRequest("Mindestens ein Anhang ist erforderlich.");
 
         var saved = new List<object>();
+
+        // Build a combined description from the email subject and sender.
         var description = string.Join(" | ", new[]
         {
             string.IsNullOrWhiteSpace(subject) ? null : $"Betreff: {subject}",
@@ -58,7 +70,7 @@ public class DocumentsController : ControllerBase
         foreach (var file in attachments.Where(a => a.Length > 0))
         {
             await using var stream = file.OpenReadStream();
-            var entry = await _svc.UploadEmailAttachmentAsync(
+            var entry = await _documentService.UploadEmailAttachmentAsync(
                 stream,
                 file.FileName,
                 string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,

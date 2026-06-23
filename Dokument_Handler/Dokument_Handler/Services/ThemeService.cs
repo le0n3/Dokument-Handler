@@ -3,21 +3,32 @@ using Dokument_Handler.Shared;
 
 namespace Dokument_Handler.Services;
 
+/// <summary>
+/// Server-side implementation of <see cref="IThemeService"/>.
+/// Reads and toggles the active UI theme via JavaScript interop.
+/// </summary>
 public class ThemeService : IThemeService
 {
     private readonly IJSRuntime _jsRuntime;
+    private readonly ILogger<ThemeService> _logger;
     private string _currentTheme = "light";
-    private bool _initialized = false;
+    private bool _initialized;
 
     public event Action? OnThemeChanged;
 
-    public ThemeService(IJSRuntime jsRuntime)
+    public ThemeService(IJSRuntime jsRuntime, ILogger<ThemeService> logger)
     {
         _jsRuntime = jsRuntime;
+        _logger = logger;
     }
 
+    /// <summary>Gets the name of the currently active theme (e.g. <c>"light"</c> or <c>"dark"</c>).</summary>
     public string CurrentTheme => _currentTheme;
 
+    /// <summary>
+    /// Reads the persisted theme from the browser and initializes the service.
+    /// Subsequent calls are no-ops.
+    /// </summary>
     public async Task InitializeAsync()
     {
         if (_initialized) return;
@@ -25,32 +36,30 @@ public class ThemeService : IThemeService
         try
         {
             _currentTheme = await _jsRuntime.InvokeAsync<string>("getTheme");
-            Console.WriteLine($"ThemeService: Theme loaded as '{_currentTheme}'");
+            _logger.LogDebug("ThemeService: theme loaded as '{Theme}'.", _currentTheme);
             _initialized = true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"ThemeService Init Error: {ex.Message}");
+            _logger.LogWarning(ex, "ThemeService: failed to load theme from browser; defaulting to 'light'.");
             _currentTheme = "light";
             _initialized = true;
         }
     }
 
+    /// <summary>Toggles between the light and dark theme and notifies subscribers.</summary>
     public async Task ToggleThemeAsync()
     {
         try
         {
-            Console.WriteLine($"ThemeService: Toggling theme from '{_currentTheme}'");
-
             var newTheme = await _jsRuntime.InvokeAsync<string>("toggleTheme");
+            _logger.LogDebug("ThemeService: theme toggled from '{Old}' to '{New}'.", _currentTheme, newTheme);
             _currentTheme = newTheme;
-
-            Console.WriteLine($"ThemeService: Theme toggled to '{_currentTheme}'");
             OnThemeChanged?.Invoke();
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"ThemeService Toggle Error: {ex.Message}");
+            _logger.LogWarning(ex, "ThemeService: failed to toggle theme.");
         }
     }
 }
