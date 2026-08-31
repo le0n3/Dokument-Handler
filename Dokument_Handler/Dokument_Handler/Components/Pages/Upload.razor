@@ -71,7 +71,7 @@
 
             <!-- Drop Zone -->
             <InputFile OnChange="OnFileSelected" style="display:none" id="fileInput" />
-            <label for="fileInput" class="upload-zone @(_dragOver ? "dragover" : "")">
+            <label for="fileInput" class="upload-zone">
                 @if (_selectedFile != null)
                 {
                     <div style="font-size:3rem">✅</div>
@@ -181,7 +181,6 @@
     private List<string> _tags = new();
     private string _tagInput = string.Empty;
     private bool _uploading;
-    private bool _dragOver;
     private string? _error;
     private DocumentEntry? _uploaded;
     private string _customFileName = string.Empty;

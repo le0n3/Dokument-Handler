@@ -10,6 +10,13 @@ namespace Dokument_Handler.Services;
 /// </summary>
 public class DocumentService
 {
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+    private static readonly HashSet<string> BlockedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".bat", ".cmd", ".com", ".dll", ".exe", ".hta", ".htm", ".html",
+        ".js", ".mjs", ".ps1", ".sh", ".svg"
+    };
     private const string EmailCategory = "E-Mail";
     private readonly IWebHostEnvironment _env;
     private readonly AppSettingsService _settingsService;
@@ -39,7 +46,7 @@ public class DocumentService
             ? Path.Combine(_env.ContentRootPath, "DocumentStorage")
             : configured;
 
-        if (string.Equals(_storageRoot, effectiveRoot, StringComparison.OrdinalIgnoreCase)
+        if (string.Equals(_storageRoot, effectiveRoot, PathComparison)
             && !string.IsNullOrWhiteSpace(_metaFile)
             && File.Exists(_metaFile))
         {
@@ -57,8 +64,15 @@ public class DocumentService
     private void EnsureDirectories()
     {
         Directory.CreateDirectory(_storageRoot);
+        _store.Categories = _store.Categories
+            .Where(IsValidCategory)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (!_store.Categories.Contains("Allgemein", StringComparer.OrdinalIgnoreCase))
+            _store.Categories.Insert(0, "Allgemein");
+
         foreach (var cat in _store.Categories)
-            Directory.CreateDirectory(Path.Combine(_storageRoot, Sanitize(cat)));
+            Directory.CreateDirectory(ResolveStoragePath(Sanitize(cat)));
     }
 
     private void LoadMetadata()
@@ -68,14 +82,53 @@ public class DocumentService
         if (!File.Exists(_metaFile))
             return;
 
-        var json = File.ReadAllText(_metaFile);
-        _store = JsonSerializer.Deserialize<DocumentStore>(json) ?? new DocumentStore();
+        try
+        {
+            var json = File.ReadAllText(_metaFile);
+            _store = JsonSerializer.Deserialize<DocumentStore>(json) ?? new DocumentStore();
+        }
+        catch (JsonException)
+        {
+            var backupFile = _metaFile + ".bak";
+            if (!File.Exists(backupFile)) throw;
+
+            var json = File.ReadAllText(backupFile);
+            _store = JsonSerializer.Deserialize<DocumentStore>(json) ?? new DocumentStore();
+        }
+
+        _store.Documents ??= [];
+        _store.Categories ??= [];
+        foreach (var document in _store.Documents)
+        {
+            document.FileName ??= string.Empty;
+            document.OriginalFileName ??= string.Empty;
+            document.Category ??= "Allgemein";
+            document.Tags ??= [];
+            document.Description ??= string.Empty;
+            document.ContentType ??= "application/octet-stream";
+            document.RelativePath ??= string.Empty;
+        }
     }
 
     private void SaveMetadata()
     {
         var json = JsonSerializer.Serialize(_store, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(_metaFile, json);
+        WriteAtomically(_metaFile, json);
+    }
+
+    private static void WriteAtomically(string path, string content)
+    {
+        var tempFile = path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(tempFile, content);
+            if (File.Exists(path)) File.Copy(path, path + ".bak", true);
+            File.Move(tempFile, path, true);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
     }
 
     /// <summary>Returns a read-only snapshot of all stored document entries.</summary>
@@ -84,7 +137,7 @@ public class DocumentService
         lock (_sync)
         {
             EnsureStoreLoaded();
-            return _store.Documents.ToList().AsReadOnly();
+            return _store.Documents.Select(CloneEntry).ToList().AsReadOnly();
         }
     }
 
@@ -107,7 +160,8 @@ public class DocumentService
         lock (_sync)
         {
             EnsureStoreLoaded();
-            return _store.Documents.FirstOrDefault(d => d.Id == id);
+            var entry = _store.Documents.FirstOrDefault(d => d.Id == id);
+            return entry == null ? null : CloneEntry(entry);
         }
     }
 
@@ -118,47 +172,83 @@ public class DocumentService
     public async Task<DocumentEntry> UploadAsync(Stream fileStream, string originalFileName,
         string category, List<string> tags, string description, string contentType)
     {
+        ArgumentNullException.ThrowIfNull(fileStream);
+        ArgumentException.ThrowIfNullOrWhiteSpace(originalFileName);
+        originalFileName = Path.GetFileName(originalFileName.Trim());
+
         string fullPath;
+        string storageRootAtStart;
         DocumentEntry entry;
 
         lock (_sync)
         {
             EnsureStoreLoaded();
+            storageRootAtStart = _storageRoot;
 
             var safeCategory = _store.Categories.Contains(category) ? category : "Allgemein";
             var categoryDir = Path.Combine(_storageRoot, Sanitize(safeCategory));
             Directory.CreateDirectory(categoryDir);
 
-            var ext = Path.GetExtension(originalFileName);
+            var ext = GetSafeExtension(originalFileName);
+            if (BlockedExtensions.Contains(ext))
+                throw new InvalidOperationException("Dieser Dateityp ist aus Sicherheitsgründen nicht zulässig.");
             var storedName = $"{Guid.NewGuid()}{ext}";
-            fullPath = Path.Combine(categoryDir, storedName);
+            fullPath = ResolveStoragePath(Path.Combine(Sanitize(safeCategory), storedName));
 
             entry = new DocumentEntry
             {
                 FileName = storedName,
                 OriginalFileName = originalFileName,
                 Category = safeCategory,
-                Tags = tags,
+                Tags = tags.ToList(),
                 Description = description,
                 ContentType = contentType,
                 RelativePath = Path.Combine(Sanitize(safeCategory), storedName)
             };
 
-            _store.Documents.Add(entry);
         }
 
-        await using (var fs = File.Create(fullPath))
+        var tempPath = fullPath + $".{Guid.NewGuid():N}.upload";
+        try
         {
-            await fileStream.CopyToAsync(fs);
-        }
+            await using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                await fileStream.CopyToAsync(fs);
+                await fs.FlushAsync();
+            }
 
-        lock (_sync)
+            var uploadedLength = new FileInfo(tempPath).Length;
+            lock (_sync)
+            {
+                EnsureStoreLoaded();
+                if (!string.Equals(storageRootAtStart, _storageRoot, PathComparison))
+                    throw new InvalidOperationException("Der Speicherpfad wurde während des Uploads geändert. Bitte erneut versuchen.");
+                var quota = _settingsService.GetStorageOptions().MaxTotalSizeBytes;
+                var currentSize = _store.Documents.Sum(document => Math.Max(0, document.FileSizeBytes));
+                if (quota > 0 && uploadedLength > quota - currentSize)
+                    throw new InvalidOperationException("Das konfigurierte Speicherlimit ist erreicht.");
+
+                File.Move(tempPath, fullPath);
+                entry.FileSizeBytes = uploadedLength;
+                _store.Documents.Add(entry);
+                try
+                {
+                    SaveMetadata();
+                }
+                catch
+                {
+                    _store.Documents.Remove(entry);
+                    if (File.Exists(fullPath)) File.Delete(fullPath);
+                    throw;
+                }
+            }
+        }
+        finally
         {
-            entry.FileSizeBytes = new FileInfo(fullPath).Length;
-            SaveMetadata();
+            if (File.Exists(tempPath)) File.Delete(tempPath);
         }
 
-        return entry;
+        return CloneEntry(entry);
     }
 
     /// <summary>
@@ -198,21 +288,22 @@ public class DocumentService
             var existing = _store.Documents.FirstOrDefault(d => d.Id == updated.Id);
             if (existing == null) return;
 
-            var oldCategoryDir = Path.Combine(_storageRoot, Sanitize(existing.Category));
-            var newCategoryDir = Path.Combine(_storageRoot, Sanitize(updated.Category));
+            var targetCategory = _store.Categories.Contains(updated.Category) ? updated.Category : "Allgemein";
+            var oldCategoryDir = ResolveStoragePath(Sanitize(existing.Category));
+            var newCategoryDir = ResolveStoragePath(Sanitize(targetCategory));
             Directory.CreateDirectory(newCategoryDir);
 
-            if (!string.Equals(existing.Category, updated.Category, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(existing.Category, targetCategory, StringComparison.OrdinalIgnoreCase))
             {
                 // Move the physical file when the category (and therefore directory) changes.
                 var oldPath = Path.Combine(oldCategoryDir, existing.FileName);
                 var newPath = Path.Combine(newCategoryDir, existing.FileName);
                 if (File.Exists(oldPath)) File.Move(oldPath, newPath);
-                existing.RelativePath = Path.Combine(Sanitize(updated.Category), existing.FileName);
+                existing.RelativePath = Path.Combine(Sanitize(targetCategory), existing.FileName);
             }
 
-            existing.Category = updated.Category;
-            existing.Tags = updated.Tags;
+            existing.Category = targetCategory;
+            existing.Tags = updated.Tags.ToList();
             existing.Description = updated.Description;
             existing.OriginalFileName = updated.OriginalFileName;
             SaveMetadata();
@@ -229,7 +320,7 @@ public class DocumentService
             var entry = _store.Documents.FirstOrDefault(d => d.Id == id);
             if (entry == null) return;
 
-            var fullPath = Path.Combine(_storageRoot, entry.RelativePath);
+            var fullPath = ResolveStoragePath(entry.RelativePath);
             if (File.Exists(fullPath)) File.Delete(fullPath);
 
             _store.Documents.Remove(entry);
@@ -243,7 +334,7 @@ public class DocumentService
         lock (_sync)
         {
             EnsureStoreLoaded();
-            return Path.Combine(_storageRoot, entry.RelativePath);
+            return ResolveStoragePath(entry.RelativePath);
         }
     }
 
@@ -253,6 +344,9 @@ public class DocumentService
     /// </summary>
     public void AddCategory(string category)
     {
+        category = category.Trim();
+        ValidateCategory(category);
+
         lock (_sync)
         {
             EnsureStoreLoaded();
@@ -260,7 +354,7 @@ public class DocumentService
             if (!_store.Categories.Contains(category))
             {
                 _store.Categories.Add(category);
-                Directory.CreateDirectory(Path.Combine(_storageRoot, Sanitize(category)));
+                Directory.CreateDirectory(ResolveStoragePath(Sanitize(category)));
                 SaveMetadata();
             }
         }
@@ -277,7 +371,7 @@ public class DocumentService
         {
             EnsureStoreLoaded();
 
-            if (string.IsNullOrWhiteSpace(query)) return _store.Documents.ToList();
+            if (string.IsNullOrWhiteSpace(query)) return _store.Documents.Select(CloneEntry).ToList();
 
             query = query.ToLowerInvariant();
 
@@ -285,7 +379,7 @@ public class DocumentService
                 .Select(d => (doc: d, score: FuzzyScore(d, query)))
                 .Where(x => x.score > 0)
                 .OrderByDescending(x => x.score)
-                .Select(x => x.doc)
+                .Select(x => CloneEntry(x.doc))
                 .ToList();
         }
     }
@@ -342,4 +436,55 @@ public class DocumentService
     /// <summary>Replaces characters that are invalid in file/directory names with underscores.</summary>
     private static string Sanitize(string name) =>
         string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+
+    private string ResolveStoragePath(string relativePath)
+    {
+        if (Path.IsPathRooted(relativePath))
+            throw new InvalidOperationException("Absolute Dokumentpfade sind nicht zulässig.");
+
+        var root = Path.GetFullPath(_storageRoot);
+        var candidate = Path.GetFullPath(Path.Combine(root, relativePath));
+        var rootPrefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                         + Path.DirectorySeparatorChar;
+
+        if (!candidate.StartsWith(rootPrefix, PathComparison))
+            throw new InvalidOperationException("Der Dokumentpfad liegt außerhalb des Speicherverzeichnisses.");
+
+        return candidate;
+    }
+
+    private static void ValidateCategory(string category)
+    {
+        if (!IsValidCategory(category))
+            throw new ArgumentException("Der Kategoriename ist ungültig.", nameof(category));
+    }
+
+    private static bool IsValidCategory(string category) =>
+        !string.IsNullOrWhiteSpace(category)
+        && category.Length <= 80
+        && category is not "." and not ".."
+        && !category.Any(char.IsControl)
+        && category.IndexOfAny(['/', '\\']) < 0;
+
+    private static string GetSafeExtension(string fileName)
+    {
+        var extension = Path.GetExtension(Path.GetFileName(fileName));
+        if (extension.Length > 20 || extension.Any(c => !char.IsLetterOrDigit(c) && c != '.'))
+            return string.Empty;
+        return extension.ToLowerInvariant();
+    }
+
+    private static DocumentEntry CloneEntry(DocumentEntry source) => new()
+    {
+        Id = source.Id,
+        FileName = source.FileName,
+        OriginalFileName = source.OriginalFileName,
+        Category = source.Category,
+        Tags = source.Tags.ToList(),
+        Description = source.Description,
+        UploadedAt = source.UploadedAt,
+        FileSizeBytes = source.FileSizeBytes,
+        ContentType = source.ContentType,
+        RelativePath = source.RelativePath
+    };
 }

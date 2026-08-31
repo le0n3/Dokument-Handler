@@ -1,8 +1,6 @@
 @page "/login"
-@rendermode InteractiveServer
-@using Dokument_Handler.Services
-@inject AuthService Auth
-@inject NavigationManager Nav
+@attribute [AllowAnonymous]
+@layout LoginLayout
 
 <PageTitle>Login</PageTitle>
 
@@ -11,20 +9,21 @@
         <h2>🔒 Dokument-Handler</h2>
         <p>Bitte gib dein Passwort ein, um fortzufahren.</p>
 
-        <EditForm Model="this" OnSubmit="HandleLogin">
+        <form method="post" action="/auth/login">
+            <AntiforgeryToken />
+            <input type="hidden" name="returnUrl" value="@SafeReturnUrl" />
             <div class="mb-3">
-                <input type="password"
-                       class="form-control @(showError ? "is-invalid" : "")"
+                <input type="password" name="password" autocomplete="current-password" required autofocus
+                       class="form-control @(Error == 1 ? "is-invalid" : "")"
                        placeholder="Passwort"
-                       @bind="password"
-                       @bind:event="oninput" />
-                @if (showError)
+                       />
+                @if (Error == 1)
                 {
                     <div class="invalid-feedback">Falsches Passwort. Bitte erneut versuchen.</div>
                 }
             </div>
             <button type="submit" class="btn btn-primary w-100">Anmelden</button>
-        </EditForm>
+        </form>
     </div>
 </div>
 
@@ -58,23 +57,15 @@
 </style>
 
 @code {
-    private string password = string.Empty;
-    private bool showError;
+    [SupplyParameterFromQuery]
+    private int? Error { get; set; }
 
     [SupplyParameterFromQuery]
     private string? ReturnUrl { get; set; }
 
-    private void HandleLogin()
-    {
-        if (Auth.Login(password))
-        {
-            var target = string.IsNullOrWhiteSpace(ReturnUrl) ? "/" : ReturnUrl;
-            Nav.NavigateTo(target);
-        }
-        else
-        {
-            showError = true;
-            password = string.Empty;
-        }
-    }
+    private string SafeReturnUrl => !string.IsNullOrWhiteSpace(ReturnUrl)
+                                    && ReturnUrl.StartsWith('/')
+                                    && !ReturnUrl.StartsWith("//", StringComparison.Ordinal)
+        ? ReturnUrl
+        : "/";
 }

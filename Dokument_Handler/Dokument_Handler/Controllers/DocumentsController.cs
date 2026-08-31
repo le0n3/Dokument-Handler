@@ -1,5 +1,6 @@
 using Dokument_Handler.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Dokument_Handler.Controllers;
 
@@ -39,9 +40,12 @@ public class DocumentsController : ControllerBase
         var path = _documentService.GetFullPath(entry);
         if (!System.IO.File.Exists(path)) return NotFound();
 
+        if (!TryGetSafeInlineContentType(entry, out var contentType))
+            return BadRequest("Dieser Dateityp kann aus Sicherheitsgründen nur heruntergeladen werden.");
+
+        Response.Headers.XContentTypeOptions = "nosniff";
         var stream = System.IO.File.OpenRead(path);
-        Response.Headers.Append("Content-Disposition", $"inline; filename=\"{entry.OriginalFileName}\"");
-        return File(stream, entry.ContentType);
+        return File(stream, contentType);
     }
 
     /// <summary>
@@ -49,6 +53,7 @@ public class DocumentsController : ControllerBase
     /// and stores them as documents in the "E-Mail" category.
     /// </summary>
     [HttpPost("email")]
+    [EnableRateLimiting("expensive")]
     [RequestSizeLimit(100_000_000)]
     public async Task<IActionResult> UploadEmailAttachments(
         [FromForm] List<IFormFile> attachments,
@@ -90,5 +95,20 @@ public class DocumentsController : ControllerBase
             return BadRequest("Keine gültigen Anhänge gefunden.");
 
         return Ok(saved);
+    }
+
+    private static bool TryGetSafeInlineContentType(Dokument_Handler.Models.DocumentEntry entry, out string contentType)
+    {
+        var extension = Path.GetExtension(entry.OriginalFileName).ToLowerInvariant();
+        contentType = extension switch
+        {
+            ".pdf" => "application/pdf",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            _ => string.Empty
+        };
+        return contentType.Length > 0;
     }
 }

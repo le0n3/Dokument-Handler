@@ -69,4 +69,18 @@ public class DocumentsControllerTests
 
         Assert.IsType<NotFoundResult>(result);
     }
+
+    [Fact]
+    public async Task GetInline_WhenFileTypeIsUnsafe_ReturnsBadRequest()
+    {
+        using var workspace = new TestWorkspace();
+        var docService = new DocumentService(workspace.Environment, workspace.AppSettingsService);
+        var controller = new DocumentsController(docService);
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("plain"));
+        var entry = await docService.UploadAsync(stream, "doc.txt", "Allgemein", [], "", "text/html");
+
+        var result = controller.GetInline(entry.Id);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
 }
