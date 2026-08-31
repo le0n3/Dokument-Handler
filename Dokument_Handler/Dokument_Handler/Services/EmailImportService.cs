@@ -44,6 +44,9 @@ public class EmailImportOptions
 
     /// <summary>Gets or sets the poll interval in seconds (default: 60).</summary>
     public int PollIntervalSeconds { get; set; } = 60;
+
+    /// <summary>Gets or sets the maximum decoded size of one attachment.</summary>
+    public long MaxAttachmentSizeBytes { get; set; } = 100 * 1024 * 1024;
 }
 
 /// <summary>
@@ -176,27 +179,52 @@ public class EmailImportService : BackgroundService
 
             var contentType = $"{attachment.ContentType.MediaType}/{attachment.ContentType.MediaSubtype}";
 
-            using var memStream = new MemoryStream();
+            var tempPath = Path.Combine(Path.GetTempPath(), $"dokument-handler-{Guid.NewGuid():N}.attachment");
 
-            if (attachment is MimePart part)
+            try
             {
-                await part.Content.DecodeToAsync(memStream, ct);
+                await using (var fileStream = new FileStream(
+                                 tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                                 bufferSize: 81920, FileOptions.Asynchronous | FileOptions.SequentialScan))
+                await using (var limitedStream = new SizeLimitedWriteStream(
+                                 fileStream, Math.Max(1, GetMaxAttachmentSize())))
+                {
+                    if (attachment is MimePart part && part.Content != null)
+                    {
+                        await part.Content.DecodeToAsync(limitedStream, ct);
+                    }
+                    else
+                    {
+                        // Multipart attachments (e.g. message/rfc822) are serialized as .eml files.
+                        await attachment.WriteToAsync(limitedStream, ct);
+                        if (!fileName.EndsWith(".eml", StringComparison.OrdinalIgnoreCase))
+                            fileName += ".eml";
+                        contentType = "message/rfc822";
+                    }
+                }
+
+                await using var input = new FileStream(
+                    tempPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    bufferSize: 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                await _docService.UploadEmailAttachmentAsync(input, fileName, contentType, description);
+
+                _logger.LogInformation("EmailImportService: Anhang '{File}' von '{From}' importiert.", fileName, message.From);
             }
-            else
+            catch (InvalidDataException ex)
             {
-                // Multipart attachments (e.g. message/rfc822) are serialized as .eml files.
-                await attachment.WriteToAsync(memStream, ct);
-                if (!fileName.EndsWith(".eml", StringComparison.OrdinalIgnoreCase))
-                    fileName += ".eml";
-                contentType = "message/rfc822";
+                _logger.LogWarning(ex, "EmailImportService: Anhang '{File}' überschreitet die Größenbegrenzung.", fileName);
             }
-
-            memStream.Position = 0;
-
-            await _docService.UploadEmailAttachmentAsync(memStream, fileName, contentType, description);
-
-            _logger.LogInformation("EmailImportService: Anhang '{File}' von '{From}' importiert.", fileName, message.From);
+            finally
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
         }
+    }
+
+    private long GetMaxAttachmentSize()
+    {
+        var configured = _settingsService.GetEmailImportOptions().MaxAttachmentSizeBytes;
+        return configured <= 0 ? 100 * 1024 * 1024 : configured;
     }
 
     /// <summary>
@@ -231,5 +259,44 @@ public class EmailImportService : BackgroundService
         }
 
         return options.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.None;
+    }
+
+    private sealed class SizeLimitedWriteStream(Stream inner, long maxBytes) : Stream
+    {
+        private long _written;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _written;
+        public override long Position { get => _written; set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            EnsureCapacity(count);
+            inner.Write(buffer, offset, count);
+            _written += count;
+        }
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureCapacity(buffer.Length);
+            await inner.WriteAsync(buffer, cancellationToken);
+            _written += buffer.Length;
+        }
+
+        private void EnsureCapacity(int count)
+        {
+            if (_written + count > maxBytes)
+                throw new InvalidDataException($"Anhang überschreitet die maximale Größe von {maxBytes} Bytes.");
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 }

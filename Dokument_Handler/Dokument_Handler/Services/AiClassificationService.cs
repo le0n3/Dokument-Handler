@@ -106,7 +106,8 @@ public class AiClassificationService
                 return null;
             }
 
-            return await CallLlmAsync(text, availableCategories, options);
+            var result = await CallLlmAsync(text, availableCategories, options);
+            return ValidateResult(result, availableCategories);
         }
         catch (Exception ex)
         {
@@ -310,5 +311,32 @@ public class AiClassificationService
             : apiBaseUrl.Trim().TrimEnd('/');
 
         return new Uri($"{baseUrl}/chat/completions");
+    }
+
+    private static AiClassificationResult? ValidateResult(
+        AiClassificationResult? result,
+        IReadOnlyList<string> availableCategories)
+    {
+        if (result == null) return null;
+
+        result.Category = availableCategories.FirstOrDefault(category =>
+                              string.Equals(category, result.Category, StringComparison.OrdinalIgnoreCase))
+                          ?? availableCategories.FirstOrDefault(category => category == "Allgemein")
+                          ?? availableCategories.FirstOrDefault()
+                          ?? "Allgemein";
+
+        result.Tags = result.Tags
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Select(tag => tag.Trim())
+            .Where(tag => tag.Length <= 50 && !tag.Any(char.IsControl))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(5)
+            .ToList();
+
+        result.Description = (result.Description ?? string.Empty).Trim();
+        if (result.Description.Length > 500)
+            result.Description = result.Description[..500];
+
+        return result;
     }
 }

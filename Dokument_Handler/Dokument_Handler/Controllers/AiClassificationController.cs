@@ -1,10 +1,12 @@
 using Dokument_Handler.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Dokument_Handler.Controllers;
 
 [ApiController]
 [Route("api/ai")]
+[EnableRateLimiting("expensive")]
 public class AiClassificationController : ControllerBase
 {
     private readonly DocumentService _documentService;

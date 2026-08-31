@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.AspNetCore.DataProtection;
 
 namespace Dokument_Handler.Services;
 
@@ -8,6 +9,9 @@ public class StorageOptions
 {
     /// <summary>Gets or sets the absolute path to the root storage directory. Empty means use the application default.</summary>
     public string RootPath { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the maximum total size of stored documents. Zero disables the quota.</summary>
+    public long MaxTotalSizeBytes { get; set; } = 10L * 1024 * 1024 * 1024;
 }
 
 /// <summary>
@@ -34,10 +38,12 @@ public class AppSettingsService
     private readonly IWebHostEnvironment _env;
     private readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
     private readonly object _sync = new();
+    private readonly IDataProtector? _secretProtector;
 
-    public AppSettingsService(IWebHostEnvironment env)
+    public AppSettingsService(IWebHostEnvironment env, IDataProtectionProvider? dataProtectionProvider = null)
     {
         _env = env;
+        _secretProtector = dataProtectionProvider?.CreateProtector("DokumentHandler.Settings.v1");
     }
 
     private string SettingsPath => Path.Combine(_env.ContentRootPath, "appsettings.json");
@@ -51,12 +57,18 @@ public class AppSettingsService
         lock (_sync)
         {
             var root = ReadRoot();
-            return new AppSettingsSnapshot
+            var settings = new AppSettingsSnapshot
             {
                 Storage = ReadSection<StorageOptions>(root, "Storage") ?? new StorageOptions(),
                 EmailImport = ReadSection<EmailImportOptions>(root, "EmailImport") ?? new EmailImportOptions(),
                 AiClassification = ReadSection<AiClassificationOptions>(root, "AiClassification") ?? new AiClassificationOptions()
             };
+
+            settings.EmailImport.Password = Environment.GetEnvironmentVariable("DOKUMENT_HANDLER_IMAP_PASSWORD")
+                                            ?? Unprotect(settings.EmailImport.Password);
+            settings.AiClassification.ApiKey = Environment.GetEnvironmentVariable("DOKUMENT_HANDLER_AI_API_KEY")
+                                               ?? Unprotect(settings.AiClassification.ApiKey);
+            return settings;
         }
     }
 
@@ -78,11 +90,36 @@ public class AppSettingsService
         lock (_sync)
         {
             var root = ReadRoot();
-            root["Storage"] = JsonSerializer.SerializeToNode(settings.Storage, _jsonOptions);
-            root["EmailImport"] = JsonSerializer.SerializeToNode(settings.EmailImport, _jsonOptions);
-            root["AiClassification"] = JsonSerializer.SerializeToNode(settings.AiClassification, _jsonOptions);
+            var existingEmailPassword = root["EmailImport"]?[nameof(EmailImportOptions.Password)]?.GetValue<string>()
+                                        ?? string.Empty;
+            var existingAiApiKey = root["AiClassification"]?[nameof(AiClassificationOptions.ApiKey)]?.GetValue<string>()
+                                   ?? string.Empty;
+            var emailImport = JsonSerializer.SerializeToNode(settings.EmailImport, _jsonOptions)!.AsObject();
+            var aiClassification = JsonSerializer.SerializeToNode(settings.AiClassification, _jsonOptions)!.AsObject();
+            emailImport[nameof(EmailImportOptions.Password)] =
+                Environment.GetEnvironmentVariable("DOKUMENT_HANDLER_IMAP_PASSWORD") == null
+                    ? Protect(settings.EmailImport.Password)
+                    : existingEmailPassword;
+            aiClassification[nameof(AiClassificationOptions.ApiKey)] =
+                Environment.GetEnvironmentVariable("DOKUMENT_HANDLER_AI_API_KEY") == null
+                    ? Protect(settings.AiClassification.ApiKey)
+                    : existingAiApiKey;
 
-            File.WriteAllText(SettingsPath, root.ToJsonString(_jsonOptions));
+            root["Storage"] = JsonSerializer.SerializeToNode(settings.Storage, _jsonOptions);
+            root["EmailImport"] = emailImport;
+            root["AiClassification"] = aiClassification;
+
+            var tempPath = SettingsPath + $".{Guid.NewGuid():N}.tmp";
+            try
+            {
+                File.WriteAllText(tempPath, root.ToJsonString(_jsonOptions));
+                if (File.Exists(SettingsPath)) File.Copy(SettingsPath, SettingsPath + ".bak", true);
+                File.Move(tempPath, SettingsPath, true);
+            }
+            finally
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
         }
 
         return Task.CompletedTask;
@@ -101,5 +138,26 @@ public class AppSettingsService
     {
         var node = root[sectionName];
         return node == null ? default : node.Deserialize<T>();
+    }
+
+    private string Protect(string value)
+    {
+        if (string.IsNullOrEmpty(value) || _secretProtector == null) return value;
+        return "protected:" + _secretProtector.Protect(value);
+    }
+
+    private string Unprotect(string value)
+    {
+        if (!value.StartsWith("protected:", StringComparison.Ordinal) || _secretProtector == null)
+            return value;
+
+        try
+        {
+            return _secretProtector.Unprotect(value[10..]);
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return string.Empty;
+        }
     }
 }

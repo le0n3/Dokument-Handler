@@ -3,44 +3,59 @@ using System.Text;
 
 namespace Dokument_Handler.Services;
 
-/// <summary>
-/// Manages application-level authentication via a single shared password.
-/// The configured password is stored as a SHA-256 hex hash in <c>appsettings.json</c>.
-/// </summary>
-public class AuthService
+/// <summary>Verifies the single-user application password without keeping global session state.</summary>
+public sealed class AuthService
 {
+    private const int SaltSize = 16;
+    private const int HashSize = 32;
+    private const int Iterations = 210_000;
     private readonly IConfiguration _configuration;
-    private bool _isAuthenticated;
 
-    public AuthService(IConfiguration configuration)
+    public AuthService(IConfiguration configuration) => _configuration = configuration;
+
+    public bool VerifyPassword(string password)
     {
-        _configuration = configuration;
+        if (string.IsNullOrEmpty(password)) return false;
+
+        var environmentPassword = Environment.GetEnvironmentVariable("DOKUMENT_HANDLER_PASSWORD");
+        if (!string.IsNullOrEmpty(environmentPassword))
+            return FixedTimeEquals(password, environmentPassword);
+
+        var encodedHash = _configuration["Authentication:PasswordHash"];
+        if (string.IsNullOrWhiteSpace(encodedHash)) return false;
+
+        var parts = encodedHash.Split('.', 3);
+        if (parts.Length != 3 || !int.TryParse(parts[0], out var iterations)
+            || iterations is < 100_000 or > 1_000_000)
+            return false;
+
+        try
+        {
+            var salt = Convert.FromBase64String(parts[1]);
+            var expectedHash = Convert.FromBase64String(parts[2]);
+            var actualHash = Rfc2898DeriveBytes.Pbkdf2(
+                password, salt, iterations, HashAlgorithmName.SHA256, expectedHash.Length);
+            return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
 
-    /// <summary>Gets a value indicating whether the current session is authenticated.</summary>
-    public bool IsAuthenticated => _isAuthenticated;
-
-    /// <summary>
-    /// Attempts to authenticate using the given <paramref name="password"/>.
-    /// </summary>
-    /// <returns><see langword="true"/> if the password matches; otherwise <see langword="false"/>.</returns>
-    public bool Login(string password)
+    public static string HashPassword(string password)
     {
-        var storedHash = _configuration["AppPassword"] ?? string.Empty;
-        var inputHash = ComputeSha256Hash(password);
-        _isAuthenticated = string.Equals(storedHash, inputHash, StringComparison.OrdinalIgnoreCase);
-        return _isAuthenticated;
+        ArgumentException.ThrowIfNullOrWhiteSpace(password);
+        var salt = RandomNumberGenerator.GetBytes(SaltSize);
+        var hash = Rfc2898DeriveBytes.Pbkdf2(
+            password, salt, Iterations, HashAlgorithmName.SHA256, HashSize);
+        return $"{Iterations}.{Convert.ToBase64String(salt)}.{Convert.ToBase64String(hash)}";
     }
 
-    /// <summary>Ends the current authenticated session.</summary>
-    public void Logout()
+    private static bool FixedTimeEquals(string left, string right)
     {
-        _isAuthenticated = false;
-    }
-
-    private static string ComputeSha256Hash(string input)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
-        return Convert.ToHexString(bytes);
+        var leftHash = SHA256.HashData(Encoding.UTF8.GetBytes(left));
+        var rightHash = SHA256.HashData(Encoding.UTF8.GetBytes(right));
+        return CryptographicOperations.FixedTimeEquals(leftHash, rightHash);
     }
 }

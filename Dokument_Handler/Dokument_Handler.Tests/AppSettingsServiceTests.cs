@@ -1,4 +1,5 @@
 using Dokument_Handler.Services;
+using Microsoft.AspNetCore.DataProtection;
 
 namespace Dokument_Handler.Tests;
 
@@ -52,5 +53,26 @@ public class AppSettingsServiceTests
         Assert.Equal("imap.example.com", reloaded.EmailImport.Host);
         Assert.Equal(30, reloaded.EmailImport.PollIntervalSeconds);
         Assert.Equal("local-key", reloaded.AiClassification.ApiKey);
+    }
+
+    [Fact]
+    public async Task SaveSettingsAsync_WithDataProtection_DoesNotWriteSecretsInPlaintext()
+    {
+        using var workspace = new TestWorkspace();
+        var sut = new AppSettingsService(workspace.Environment, new EphemeralDataProtectionProvider());
+        var settings = new AppSettingsSnapshot
+        {
+            EmailImport = new EmailImportOptions { Password = "imap-secret-value" },
+            AiClassification = new AiClassificationOptions { ApiKey = "ai-secret-value" }
+        };
+
+        await sut.SaveSettingsAsync(settings);
+        var rawJson = await File.ReadAllTextAsync(Path.Combine(workspace.RootPath, "appsettings.json"));
+        var reloaded = sut.GetSettings();
+
+        Assert.DoesNotContain("imap-secret-value", rawJson);
+        Assert.DoesNotContain("ai-secret-value", rawJson);
+        Assert.Equal("imap-secret-value", reloaded.EmailImport.Password);
+        Assert.Equal("ai-secret-value", reloaded.AiClassification.ApiKey);
     }
 }

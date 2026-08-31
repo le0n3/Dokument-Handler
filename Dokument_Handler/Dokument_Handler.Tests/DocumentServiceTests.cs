@@ -112,4 +112,99 @@ public class DocumentServiceTests
         Assert.Equal("Von: test@example.com", entry.Description);
         Assert.Contains("E-Mail", sut.GetCategories());
     }
+
+    [Fact]
+    public void AddCategory_RejectsTraversalNames()
+    {
+        using var workspace = new TestWorkspace();
+        var sut = new DocumentService(workspace.Environment, workspace.AppSettingsService);
+
+        Assert.Throws<ArgumentException>(() => sut.AddCategory(".."));
+        Assert.Throws<ArgumentException>(() => sut.AddCategory("foo/bar"));
+    }
+
+    [Fact]
+    public async Task GetById_ReturnsDefensiveCopy()
+    {
+        using var workspace = new TestWorkspace();
+        var sut = new DocumentService(workspace.Environment, workspace.AppSettingsService);
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("copy-test"));
+        var entry = await sut.UploadAsync(stream, "doc.pdf", "Allgemein", [], "", "application/pdf");
+
+        var copy = sut.GetById(entry.Id)!;
+        copy.Category = "Rechnungen";
+
+        Assert.Equal("Allgemein", sut.GetById(entry.Id)!.Category);
+    }
+
+    [Fact]
+    public async Task UploadAsync_WhenCopyFails_DoesNotCreateEntry()
+    {
+        using var workspace = new TestWorkspace();
+        var sut = new DocumentService(workspace.Environment, workspace.AppSettingsService);
+        await using var stream = new FailingReadStream();
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            sut.UploadAsync(stream, "doc.pdf", "Allgemein", [], "", "application/pdf"));
+
+        Assert.Empty(sut.GetAll());
+    }
+
+    [Fact]
+    public async Task UploadAsync_RejectsActiveWebContent()
+    {
+        using var workspace = new TestWorkspace();
+        var sut = new DocumentService(workspace.Environment, workspace.AppSettingsService);
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("<script></script>"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.UploadAsync(stream, "payload.html", "Allgemein", [], "", "text/html"));
+    }
+
+    [Fact]
+    public async Task UploadAsync_WhenStorageQuotaExceeded_DoesNotStoreFile()
+    {
+        using var workspace = new TestWorkspace();
+        workspace.WriteSettings(new
+        {
+            Storage = new { RootPath = "", MaxTotalSizeBytes = 4 }
+        });
+        var sut = new DocumentService(workspace.Environment, workspace.AppSettingsService);
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("12345"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.UploadAsync(stream, "doc.txt", "Allgemein", [], "", "text/plain"));
+
+        Assert.Empty(sut.GetAll());
+    }
+
+    [Fact]
+    public void Constructor_DropsUnsafeCategoriesFromMetadata()
+    {
+        using var workspace = new TestWorkspace();
+        var storagePath = Path.Combine(workspace.RootPath, "DocumentStorage");
+        Directory.CreateDirectory(storagePath);
+        File.WriteAllText(Path.Combine(storagePath, "_metadata.json"),
+            """{"Documents":[],"Categories":["Allgemein","..","safe/unsafe"]}""");
+
+        var sut = new DocumentService(workspace.Environment, workspace.AppSettingsService);
+
+        Assert.Equal(["Allgemein"], sut.GetCategories());
+    }
+
+    private sealed class FailingReadStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("Test failure");
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<int>(new IOException("Test failure"));
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 }

@@ -1,8 +1,6 @@
 ﻿@inherits LayoutComponentBase
 @using Dokument_Handler.Services
 @using Dokument_Handler.Shared
-@inject NavigationManager Nav
-@inject AuthService Auth
 
 <div class="app-layout">
     <nav class="sidebar">
@@ -86,6 +84,10 @@
 
         <div class="sidebar-footer">
             <ThemeToggleButton />
+            <form method="post" action="/auth/logout" style="margin-top:.5rem">
+                <AntiforgeryToken />
+                <button class="btn btn-ghost w-100" type="submit">Abmelden</button>
+            </form>
         </div>
     </nav>
 
@@ -99,13 +101,3 @@
     <a href="." class="reload">Reload</a>
     <span class="dismiss">🗙</span>
 </div>
-
-@code {
-    protected override void OnInitialized()
-    {
-        if (!Auth.IsAuthenticated && !Nav.Uri.Contains("/login"))
-        {
-            Nav.NavigateTo("/login", replace: true);
-        }
-    }
-}
